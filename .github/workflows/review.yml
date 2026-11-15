@@ -1,0 +1,81 @@
+name: Mistral PR Review (reutilizable)
+
+# Workflow reutilizable: lo llama el workflow de cada repo (ver
+# ejemplos/mistral-review.yml). Revisa el PR del repo que llama con el script
+# de este repo; nunca ejecuta código del PR.
+#
+# La concurrencia (un push nuevo cancela la revisión anterior) va en el
+# workflow que llama: repetirla aquí con el mismo grupo podría bloquearlo.
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: Modelo de Mistral; vacío usa el del script (zai-glm-5-3-flash)
+        type: string
+        default: ""
+      excluded:
+        description: Pathspecs que no se revisan (generados), uno por línea o separados por comas
+        type: string
+        default: ""
+      guides:
+        description: Archivos de guía del proyecto, por orden de preferencia; vacío = REVIEW.md, AGENTS.md, CLAUDE.md
+        type: string
+        default: ""
+      ref:
+        description: Rama o etiqueta de novanoticia/mistral-review cuyo script se ejecuta; debe coincidir con la de `uses:`
+        type: string
+        default: main
+    secrets:
+      MISTRAL_API_KEY:
+        required: false
+
+jobs:
+  mistral-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Rama de confianza del repo que llama: el PR solo se lee con Git.
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/checkout@v4
+        with:
+          repository: novanoticia/mistral-review
+          ref: ${{ inputs.ref }}
+          path: .mistral-review
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.12+: el parser de 3.11 agota la recursión con expresiones muy
+          # profundas y el contexto de ese archivo se queda en ventanas.
+          python-version: '3.12'
+
+      # El token solo vive en este paso (cabecera de esta orden, nunca en
+      # .git/config): sin él, un repo privado no deja leer el PR.
+      - name: Obtener los objetos del PR sin ejecutar su código
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            fetch --no-tags origin "refs/pull/$PR_NUMBER/head"
+
+      - name: Mistral AI Review
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MISTRAL_MODEL: ${{ inputs.model }}
+          MISTRAL_EXCLUIDOS: ${{ inputs.excluded }}
+          MISTRAL_GUIAS: ${{ inputs.guides }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .mistral-review/scripts/mistral_review.py
