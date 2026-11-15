@@ -55,7 +55,9 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          # 3.12+: el parser de 3.11 agota la recursión con expresiones muy
+          # profundas y el contexto de ese archivo se queda en ventanas.
+          python-version: '3.12'
 
       - name: Obtener los objetos del PR sin ejecutar su código
         env:
