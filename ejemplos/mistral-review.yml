@@ -1,0 +1,27 @@
+# Copia este archivo en .github/workflows/mistral-review.yml del repo que
+# quieras revisar. Necesita el secreto MISTRAL_API_KEY y, opcionalmente, la
+# variable MISTRAL_MODEL (Settings → Secrets and variables → Actions).
+name: Mistral PR Review
+
+on:
+  pull_request:
+    types: [ready_for_review, opened, synchronize, reopened, edited]
+
+# Un push nuevo cancela la revisión anterior del mismo PR.
+concurrency:
+  group: mistral-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  mistral-review:
+    permissions:
+      pull-requests: write
+      contents: read
+    uses: novanoticia/mistral-review/.github/workflows/review.yml@main
+    with:
+      model: ${{ vars.MISTRAL_MODEL }}
+      # Archivos generados que no merece la pena revisar (opcional):
+      # excluded: |
+      #   tests/golden/**
+    secrets:
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
