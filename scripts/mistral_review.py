@@ -785,7 +785,7 @@ def _render_hallazgo(partes, i, h, inerte=False):
 
 def renderizar(resultado, modelo, diff_len, recortado, cabeza="", error=None,
                comprobaciones=None, ejecucion_url="", intento="",
-               sin_verificar=None, base=""):
+               sin_verificar=None, base="", diagnostico=None):
     partes = [MARCA, "## Revisión de [Mistral AI (@mistralai)]"
               "(https://github.com/mistralai) (`%s`)" % modelo]
     if cabeza:
@@ -803,6 +803,11 @@ def renderizar(resultado, modelo, diff_len, recortado, cabeza="", error=None,
         partes.append("**Revisión no válida:** la respuesta no cumple el esquema "
                       "de hallazgos y comprobaciones o sus citas no corresponden al diff enviado. "
                       "No permite concluir que el PR esté libre de hallazgos.")
+        if diagnostico:
+            # Solo los códigos de la regla, nunca el contenido de la respuesta
+            # (las copias de los otros repos lo decían; se perdió al fusionar).
+            partes.append("Regla incumplida en la última de %d solicitudes: %s." % (
+                INTENTOS_RESPUESTA, ", ".join("`%s`" % c for c in diagnostico)))
         if sin_verificar:
             # Se muestran para revisarlos a mano: ni confirmados ni descartados.
             partes.append("### Hallazgos devueltos sin aceptar (%d)" % len(sin_verificar))
@@ -926,7 +931,7 @@ def main():
         print(aviso)
         return 0
     diff, recortado, resultado, error = "", False, None, None
-    comprobaciones, sin_verificar = None, []
+    comprobaciones, sin_verificar, diagnostico = None, [], []
     try:
         # Tachado antes de validar: las citas se contrastan con lo que se envió.
         diff = mask_secrets(obtener_diff(pr["base"]["sha"], pr["head"]["sha"]))
@@ -983,7 +988,8 @@ def main():
                         comprobaciones=comprobaciones,
                         ejecucion_url=ejecucion_url, intento=intento,
                         base=pr["base"]["sha"],
-                        sin_verificar=sin_verificar if resultado is None else None)
+                        sin_verificar=sin_verificar if resultado is None else None,
+                        diagnostico=diagnostico if resultado is None else None)
     escribir_resumen(cuerpo)
     print(cuerpo)
     try:

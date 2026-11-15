@@ -369,6 +369,9 @@ class TestReintentoYCorte(unittest.TestCase):
         cuerpo = publicar.call_args.args[2]
         self.assertIn("Revisión no válida", cuerpo)
         self.assertNotIn("mistral-review-ok", cuerpo)
+        # El comentario nombra la regla, como el registro de Actions.
+        self.assertIn("Regla incumplida en la última de 2 solicitudes: "
+                      "`comprobacion_0_campos_invalidos`.", cuerpo)
         self.assertTrue(any(c.args[0].startswith("::error::")
                             for c in salida.call_args_list))
 
