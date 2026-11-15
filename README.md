@@ -20,6 +20,8 @@ comprobarlos antes de actuar.
   a 6 comprobaciones. Una cita vale si es una línea completa del diff o varias
   líneas seguidas de un mismo hunk; si no, la revisión se rechaza.
 - Si la respuesta llega mal formada o cortada por `length`, la pide una vez más.
+  Si la segunda tampoco vale, el comentario nombra la regla incumplida (solo su
+  código, nunca el contenido de la respuesta).
 - Publica un comentario por commit revisado, con el modelo y un enlace a la
   ejecución. Editar el PR no repite la revisión; «Re-run jobs» sí.
 
