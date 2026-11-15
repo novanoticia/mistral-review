@@ -59,10 +59,17 @@ jobs:
           # profundas y el contexto de ese archivo se queda en ventanas.
           python-version: '3.12'
 
+      # El token solo vive en este paso (cabecera de esta orden, nunca en
+      # .git/config): sin él, un repo privado no deja leer el PR.
       - name: Obtener los objetos del PR sin ejecutar su código
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: git fetch --no-tags origin "refs/pull/$PR_NUMBER/head"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            fetch --no-tags origin "refs/pull/$PR_NUMBER/head"
 
       - name: Mistral AI Review
         env:
