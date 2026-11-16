@@ -32,6 +32,14 @@ on:
         description: Modelo del revisor (MISTRAL_MODEL); vacío usa el del script
         type: string
         default: ''
+      excluded:
+        description: Pathspecs que no se revisan (generados), uno por línea o separados por comas
+        type: string
+        default: ''
+      guides:
+        description: Archivos de guía del proyecto, por orden de preferencia; vacío = REVIEW.md, AGENTS.md, CLAUDE.md
+        type: string
+        default: ''
       casos:
         description: Ruta de los casos en el repo que llama
         type: string
@@ -73,6 +81,7 @@ jobs:
         env:
           SOLO: ${{ inputs.solo }}
           CASOS: ${{ inputs.casos }}
+          MISTRAL_EXCLUIDOS: ${{ inputs.excluded }}
         run: python3 .mistral-review/scripts/mistral_eval.py --casos "$CASOS" --solo "$SOLO"
 
       - name: Evaluar
@@ -84,6 +93,9 @@ jobs:
         env:
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           MISTRAL_MODEL: ${{ inputs.model }}
+          # Como en una revisión real del repo: mismas exclusiones y guía.
+          MISTRAL_EXCLUIDOS: ${{ inputs.excluded }}
+          MISTRAL_GUIAS: ${{ inputs.guides }}
           CASOS: ${{ inputs.casos }}
           REPETICIONES: ${{ inputs.repeticiones }}
           SOLO: ${{ inputs.solo }}
