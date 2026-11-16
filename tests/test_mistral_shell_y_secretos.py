@@ -84,6 +84,22 @@ class TestSecretos(unittest.TestCase):
                 self.assertIn("***", tachado)
         self.assertEqual(mr.mask_secrets("x = 1\nnombre = 'ana'"), "x = 1\nnombre = 'ana'")
 
+    def test_no_tacha_expresiones_de_github_actions(self):
+        # Una expresión `${{ … }}` es una referencia, no un valor: tacharla
+        # deja `secrets:` como `***` y confunde al modelo (claude-skills-exporter#23).
+        for linea in ("MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}",
+                      "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}",
+                      "token: '${{ github.token }}'",
+                      'GH_TOKEN: "${{ github.token }}"'):
+            with self.subTest(linea=linea):
+                self.assertEqual(mr.mask_secrets(linea), linea)
+        # Un valor literal en la misma forma YAML se sigue tachando.
+        self.assertEqual(mr.mask_secrets("api_key = \"valor\""), 'api_key = "***"')
+        self.assertEqual(mr.mask_secrets("MISTRAL_API_KEY: %s" % VALOR),
+                         "MISTRAL_API_KEY: ***")
+        # Solo la expresión completa `${{`: un `$` suelto no la imita.
+        self.assertEqual(mr.mask_secrets("token: $%s" % VALOR), "token: ***")
+
     def test_enmascara_asignaciones_antes_de_enviar_a_mistral(self):
         entrada = 'API_KEY="' + VALOR + '"'
         mensajes, _ = mr.construir_mensajes(entrada, entrada, entrada,

@@ -154,8 +154,11 @@ def mask_secrets(texto):
     Patrón de recon.sh (repo-auditor-ia). Se aplica al diff, al mensaje que
     va a Mistral y al informe publicado: un secreto del PR no sale del repo.
     Es una lista de bloqueo, no una garantía: un formato raro puede escapar.
+    Un valor que empieza por `${{` es una expresión de GitHub Actions (una
+    referencia como `${{ secrets.X }}`, no el secreto): no se tacha
+    (claude-skills-exporter#23, confundía al modelo).
     """
-    patron = r'''((?:api[_-]?key|secret|passw(?:or)?d|token|private[_-]?key)[a-z0-9_]*["']?[ \t]*[:=][ \t]*["']?)([^\s"',;}]+)'''
+    patron = r'''((?:api[_-]?key|secret|passw(?:or)?d|token|private[_-]?key)[a-z0-9_]*["']?[ \t]*[:=][ \t]*["']?)(?!\$\{\{)([^\s"',;}]+)'''
     def ocultar(match):
         return match.group(1) + "***"
     return re.sub(patron, ocultar, texto, flags=re.IGNORECASE)
