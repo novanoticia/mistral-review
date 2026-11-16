@@ -29,7 +29,15 @@ on:
         type: string
         default: ''
       model:
-        description: Modelo del revisor (MISTRAL_MODEL); vacío usa el del script
+        description: Modelo del revisor (MISTRAL_MODEL); con Mistral vacío usa el del script, con OpenRouter obligatorio
+        type: string
+        default: ''
+      provider:
+        description: Proveedor del modelo, mistral u openrouter; vacío = mistral
+        type: string
+        default: ''
+      openrouter_provider:
+        description: Solo con OpenRouter, proveedor final fijo (p. ej. z-ai); vacío = lo elige OpenRouter
         type: string
         default: ''
       excluded:
@@ -50,6 +58,9 @@ on:
         default: main
     secrets:
       MISTRAL_API_KEY:
+        required: false
+      OPENROUTER_API_KEY:
+        # Solo con provider: openrouter. Cada proveedor lee únicamente su clave.
         required: false
 
 jobs:
@@ -93,6 +104,9 @@ jobs:
         env:
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           MISTRAL_MODEL: ${{ inputs.model }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MISTRAL_PROVEEDOR: ${{ inputs.provider }}
+          MISTRAL_OPENROUTER_PROVEEDOR: ${{ inputs.openrouter_provider }}
           # Como en una revisión real del repo: mismas exclusiones y guía.
           MISTRAL_EXCLUIDOS: ${{ inputs.excluded }}
           MISTRAL_GUIAS: ${{ inputs.guides }}

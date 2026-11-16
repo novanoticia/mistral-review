@@ -445,5 +445,59 @@ class TestEvaluacionConProveedor(unittest.TestCase):
         self.assertEqual(presupuesto.respondidas, 3)
 
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+
+@unittest.skipUnless(yaml, "PyYAML no instalado")
+class TestWorkflowsConProveedor(unittest.TestCase):
+    """Los tres reutilizables aceptan OpenRouter sin obligar a nada a quien no lo usa."""
+    RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    REUTILIZABLES = {"review.yml": ("mistral-review", "mistral_review.py"),
+                     "reply.yml": ("responder", "mistral_reply.py"),
+                     "eval.yml": ("mistral-eval", "--ejecutar")}
+
+    def cargar(self, ruta):
+        with open(os.path.join(self.RAIZ, ruta), encoding="utf-8") as fh:
+            return yaml.safe_load(fh)
+
+    def test_entradas_y_secreto_opcionales_que_llegan_al_script(self):
+        for nombre, (trabajo, marca) in self.REUTILIZABLES.items():
+            with self.subTest(workflow=nombre):
+                flujo = self.cargar(".github/workflows/" + nombre)
+                llamada = flujo[True]["workflow_call"]   # YAML 1.1: `on` es True
+                for entrada in ("provider", "openrouter_provider"):
+                    # Vacío = Mistral: los repos que ya lo llaman no cambian.
+                    self.assertEqual(llamada["inputs"][entrada]["default"], "")
+                    self.assertEqual(llamada["inputs"][entrada]["type"], "string")
+                for secreto in ("MISTRAL_API_KEY", "OPENROUTER_API_KEY"):
+                    self.assertFalse(llamada["secrets"][secreto]["required"])
+                paso = next(p for p in flujo["jobs"][trabajo]["steps"]
+                            if marca in p.get("run", ""))
+                self.assertEqual(paso["env"]["MISTRAL_PROVEEDOR"], "${{ inputs.provider }}")
+                self.assertEqual(paso["env"]["MISTRAL_OPENROUTER_PROVEEDOR"],
+                                 "${{ inputs.openrouter_provider }}")
+                self.assertEqual(paso["env"]["OPENROUTER_API_KEY"],
+                                 "${{ secrets.OPENROUTER_API_KEY }}")
+                self.assertEqual(paso["env"]["MISTRAL_API_KEY"],
+                                 "${{ secrets.MISTRAL_API_KEY }}")
+                # La clave solo llega al paso que llama a la API.
+                otros = [p for p in flujo["jobs"][trabajo]["steps"] if p is not paso]
+                self.assertFalse(any("OPENROUTER_API_KEY" in json.dumps(p) for p in otros))
+
+    def test_los_ejemplos_pasan_entradas_y_secretos_que_existen(self):
+        for ejemplo, nombre in (("mistral-review.yml", "review.yml"),
+                                ("mistral-reply.yml", "reply.yml"),
+                                ("mistral-eval.yml", "eval.yml")):
+            with self.subTest(ejemplo=ejemplo):
+                trabajo = next(iter(self.cargar("ejemplos/" + ejemplo)["jobs"].values()))
+                llamada = self.cargar(".github/workflows/" + nombre)[True]["workflow_call"]
+                self.assertLessEqual(set(trabajo["with"]), set(llamada["inputs"]))
+                self.assertLessEqual(set(trabajo["secrets"]), set(llamada["secrets"]))
+                self.assertEqual(trabajo["with"]["provider"], "${{ vars.MISTRAL_PROVIDER }}")
+
+
 if __name__ == "__main__":
     unittest.main()
