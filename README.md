@@ -25,6 +25,9 @@ comprobarlos antes de actuar.
 - Publica un comentario por commit revisado, con el modelo y un enlace a la
   ejecución. Editar el PR no repite la revisión; «Re-run jobs» sí.
 
+Historia y detalles del comportamiento (por qué se repite una solicitud, un
+informe por commit, modelos que razonan…): [docs/revision.md](docs/revision.md).
+
 ## Cómo usarlo en un repo
 
 1. Copia [`ejemplos/mistral-review.yml`](ejemplos/mistral-review.yml) en
