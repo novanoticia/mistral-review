@@ -186,8 +186,8 @@ HALLAZGO = {"severidad": "media", "archivo": "a.py", "fragmento": "y = x + 1",
 
 
 class TestRevisar(unittest.TestCase):
-    def revisar(self, respuestas, destino=None):
-        with mock.patch.object(mr, "obtener_diff", return_value=DIFF), \
+    def revisar(self, respuestas, destino=None, diff=DIFF):
+        with mock.patch.object(mr, "obtener_diff", return_value=diff), \
                 mock.patch.object(mr, "obtener_rutas_diff", return_value={"a.py"}), \
                 mock.patch.object(mr, "obtener_contexto", return_value=""), \
                 mock.patch.object(mr, "leer_guia", return_value=(None, "")), \
@@ -210,6 +210,19 @@ class TestRevisar(unittest.TestCase):
         usuario = api.call_args.args[0][1]["content"]
         self.assertIn("asunto", usuario)
         self.assertIn("(sin descripción)", usuario)
+
+    def test_una_cita_de_una_linea_con_secreto_se_valida_tachada(self):
+        # Como en una revisión real: el modelo recibe el diff tachado y copia
+        # la línea tachada; validarla contra el diff sin tachar la rechazaba.
+        valor = "valor" + "privado"
+        diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n"
+                '-api_key = "viejo"\n+api_key = "%s"\n' % valor)
+        citado = dict(HALLAZGO, fragmento=mr.mask_secrets('api_key = "%s"' % valor))
+        texto = json.dumps({"resumen": "R", "hallazgos": [citado],
+                            "comprobaciones": COMPROBACIONES})
+        registro, api = self.revisar([texto], diff=diff)
+        self.assertEqual((registro["estado"], api.call_count), ("valida", 1))
+        self.assertNotIn(valor, api.call_args.args[0][1]["content"])
 
     def test_respuesta_mal_formada_se_pide_dos_veces_y_queda_invalida(self):
         registro, api = self.revisar(["no json", "no json", "no json"])

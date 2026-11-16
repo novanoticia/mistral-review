@@ -328,7 +328,10 @@ def clasificar(hallazgo, diff, destino):
 def revisar(caso, modelo, clave):
     """Una revisión del caso, igual que main(): devuelve un registro sin texto libre
     del modelo salvo los hallazgos y pendientes ya validados."""
-    diff = mr.obtener_diff(caso["base"], caso["cabeza"])
+    # Tachado antes de enviar, validar y clasificar, como en main(): una cita
+    # de una línea con secreto llega al modelo tachada (revisión Codex,
+    # mistral-review#3).
+    diff = mr.mask_secrets(mr.obtener_diff(caso["base"], caso["cabeza"]))
     titulo = git("log", "-1", "--format=%s", caso["cabeza"]).strip()
     mensajes, recortado = mr.construir_mensajes(
         titulo, None, diff, mr.leer_guia(),
