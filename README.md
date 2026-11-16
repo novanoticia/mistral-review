@@ -6,7 +6,7 @@ que una mejora se hace una vez y llega a todos.
 
 Es una **segunda opinión barata**, no un detector fiable: en una evaluación con
 defectos reales del historial de `email-triage-plugin` no encontró ninguno de
-los 7, aunque sí ve defectos evidentes (caso de control). Sus hallazgos hay que
+los 7 ([evaluación](docs/evaluacion.md)), aunque sí ve defectos evidentes (caso de control). Sus hallazgos hay que
 comprobarlos antes de actuar.
 
 ## Qué hace
@@ -50,6 +50,35 @@ comprobarlos antes de actuar.
 `main`; cuando haya una etiqueta (`v1`), se puede fijar en ambos sitios para que
 un cambio aquí no llegue a todos los repos sin control.
 
+## Contraste de revisiones de otras IAs (opcional)
+
+`reply.yml` contrasta por lectura los hallazgos que dejan en un PR otras IAs
+(Codex, Claude, Copilot, CodeRabbit, Gemini) o comentarios firmados como
+asistidos por Claude. Responde con un dictamen por hallazgo —de acuerdo, no se
+sostiene, ya corregido o pendiente—, con citas literales del código. Solo
+comenta: no aplica parches. Un rechazo de la respuesta del modelo va al
+resumen de Actions, no al PR.
+
+Para activarlo, copia [`ejemplos/mistral-reply.yml`](ejemplos/mistral-reply.yml)
+en `.github/workflows/` del repo. Usa el mismo secreto y, opcionalmente, la
+variable `MISTRAL_REPLY_MODEL` para probar otro modelo solo aquí. También se
+puede lanzar a mano (**Actions → Mistral Reply to AI Reviews → Run workflow**)
+con el número del PR y el id del comentario.
+
+Procede de `email-triage-plugin`; su historia y sus límites están en el
+docstring de [`scripts/mistral_reply.py`](scripts/mistral_reply.py).
+
+## Evaluación con casos reales (opcional)
+
+`eval.yml` mide si el revisor encuentra defectos de verdad, con commits del
+historial del repo: positivos (un defecto conocido y su arreglo), negativos
+(hallazgos falsos de antes) y un caso de control evidente. Es manual: cada
+ejecución cuesta dinero. Para activarlo, copia
+[`ejemplos/mistral-eval.yml`](ejemplos/mistral-eval.yml) en `.github/workflows/`
+y los casos en `.github/eval/casos.json` (plantilla:
+[`ejemplos/eval-casos.json`](ejemplos/eval-casos.json)). Método, límites y
+resultados medidos en `email-triage-plugin`: [docs/evaluacion.md](docs/evaluacion.md).
+
 ## Coste
 
 Con `zai-glm-5-3-flash` (0,15 / 0,50 USD por millón de tokens de entrada /
@@ -67,8 +96,8 @@ Solo biblioteca estándar de Python, sin red ni API en los tests.
 Procedencia: fusiona las cuatro copias que tenían `email-triage-plugin`
 (base), `claude-skills-exporter`, `multilang-repo-skill` y `repo-auditor-ia`
 (contexto de shell y `mask_secrets`). El contraste de respuestas a otras IAs
-(`mistral_reply.py`) y la evaluación (`mistral_eval.py`) siguen, por ahora, en
-`email-triage-plugin`.
+(`mistral_reply.py`) y la evaluación (`mistral_eval.py`) se trajeron después,
+también de `email-triage-plugin`.
 
 ---
 

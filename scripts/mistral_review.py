@@ -26,6 +26,7 @@ con el contexto de funciones de shell y `mask_secrets` de repo-auditor-ia.
 import ast
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+import fnmatch
 import json
 import os
 import re
@@ -61,6 +62,19 @@ def _lista_env(nombre):
 def excluidos():
     """Pathspecs que el repo que llama no quiere revisar (generados, etc.)."""
     return _lista_env("MISTRAL_EXCLUIDOS")
+
+
+def excluido(ruta):
+    """¿Cubre `ruta` algún pathspec de `excluidos()`? Misma regla que
+    `:(exclude)` en `obtener_diff` (pathspec de Git sin magia): igual, un
+    directorio que la contiene o un comodín donde `*` también cruza `/`.
+    Para lo que se lee fuera del diff (el contraste de `mistral_reply.py`)."""
+    for patron in excluidos():
+        patron = patron.rstrip("/")
+        if patron and (ruta == patron or ruta.startswith(patron + "/")
+                       or fnmatch.fnmatchcase(ruta, patron)):
+            return True
+    return False
 
 
 def guias():

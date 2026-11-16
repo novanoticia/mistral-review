@@ -1,0 +1,42 @@
+name: Mistral Eval
+
+# Evaluación manual del revisor con casos reales del historial de este repo
+# (.github/eval/casos.json; plantilla en mistral-review/ejemplos/eval-casos.json).
+# No se lanza sola: cada solicitud cuesta dinero.
+on:
+  workflow_dispatch:
+    inputs:
+      repeticiones:
+        description: Revisiones por caso
+        default: '2'
+      solo:
+        description: Ids de casos separados por comas (vacío = todos)
+        default: ''
+      modelo:
+        description: Modelo solo para esta evaluación (vacío = MISTRAL_MODEL)
+        default: ''
+      esfuerzo:
+        description: Esfuerzo de razonamiento, low, medium o high (vacío = el del revisor)
+        default: ''
+      max_salida:
+        description: Tope de tokens de salida, 4000 a 256000 (vacío = el del revisor)
+        default: ''
+
+concurrency:
+  group: mistral-eval
+  cancel-in-progress: false
+
+jobs:
+  mistral-eval:
+    permissions:
+      contents: read
+    uses: novanoticia/mistral-review/.github/workflows/eval.yml@main
+    with:
+      repeticiones: ${{ inputs.repeticiones }}
+      solo: ${{ inputs.solo }}
+      modelo: ${{ inputs.modelo }}
+      esfuerzo: ${{ inputs.esfuerzo }}
+      max_salida: ${{ inputs.max_salida }}
+      model: ${{ vars.MISTRAL_MODEL }}
+    secrets:
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}

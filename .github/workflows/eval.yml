@@ -1,0 +1,106 @@
+name: Mistral Eval (reutilizable)
+
+# Workflow reutilizable: evalúa el revisor con casos reales del historial del
+# repo que llama (por defecto .github/eval/casos.json). Ver
+# ejemplos/mistral-eval.yml. Solo manual: cada solicitud cuesta dinero.
+# La concurrencia va en el workflow que llama.
+
+on:
+  workflow_call:
+    inputs:
+      repeticiones:
+        description: Revisiones por caso
+        type: string
+        default: '2'
+      solo:
+        description: Ids de casos separados por comas (vacío = todos)
+        type: string
+        default: ''
+      modelo:
+        description: Modelo solo para esta evaluación (vacío = model)
+        type: string
+        default: ''
+      esfuerzo:
+        description: Esfuerzo de razonamiento, low, medium o high (vacío = el del revisor)
+        type: string
+        default: ''
+      max_salida:
+        description: Tope de tokens de salida, 4000 a 256000 (vacío = el del revisor)
+        type: string
+        default: ''
+      model:
+        description: Modelo del revisor (MISTRAL_MODEL); vacío usa el del script
+        type: string
+        default: ''
+      casos:
+        description: Ruta de los casos en el repo que llama
+        type: string
+        default: .github/eval/casos.json
+      ref:
+        description: Rama o etiqueta de novanoticia/mistral-review cuyo script se ejecuta; debe coincidir con la de `uses:`
+        type: string
+        default: main
+    secrets:
+      MISTRAL_API_KEY:
+        required: false
+
+jobs:
+  mistral-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Los casos son commits antiguos del repo que llama: toda la historia.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: novanoticia/mistral-review
+          ref: ${{ inputs.ref }}
+          path: .mistral-review
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Comprobar casos y objetivos sin llamar a la API
+        env:
+          SOLO: ${{ inputs.solo }}
+          CASOS: ${{ inputs.casos }}
+        run: python3 .mistral-review/scripts/mistral_eval.py --casos "$CASOS" --solo "$SOLO"
+
+      - name: Evaluar
+        # Por debajo de los 90 del job: si se agota, el paso se corta y
+        # «Guardar el resultado» aún sube lo revisado (el JSON se guarda tras
+        # cada revisión). En email-triage-plugin la ejecución #5 se canceló
+        # sin dejar nada.
+        timeout-minutes: 80
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MISTRAL_MODEL: ${{ inputs.model }}
+          CASOS: ${{ inputs.casos }}
+          REPETICIONES: ${{ inputs.repeticiones }}
+          SOLO: ${{ inputs.solo }}
+          MODELO: ${{ inputs.modelo }}
+          ESFUERZO: ${{ inputs.esfuerzo }}
+          MAX_SALIDA: ${{ inputs.max_salida }}
+        run: >
+          python3 .mistral-review/scripts/mistral_eval.py --ejecutar
+          --casos "$CASOS"
+          --repeticiones "$REPETICIONES" --solo "$SOLO"
+          --modelo "$MODELO" --esfuerzo "$ESFUERZO" --max-salida "$MAX_SALIDA"
+          --salida mistral-eval.json
+
+      - name: Guardar el resultado
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mistral-eval
+          path: mistral-eval.json
+          if-no-files-found: ignore

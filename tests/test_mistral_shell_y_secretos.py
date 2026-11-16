@@ -121,6 +121,28 @@ class TestParametros(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MISTRAL_EXCLUIDOS": ""}):
             self.assertEqual(mr.excluidos(), ())
 
+    def test_excluido_sigue_la_misma_regla_que_git(self):
+        # `excluido` decide lo que el contraste no lee; `obtener_diff` usa
+        # `:(exclude)` de Git. Las dos reglas tienen que coincidir.
+        import subprocess, tempfile
+        rutas = ["tests/golden/a.json", "tests/golden/sub/b.json", "tests/goldenx.py",
+                 "gen/x.py", "src/gen/x.py", "a.min.js", "lib/a.min.js", "README.md"]
+        patrones = "tests/golden/**\ngen\n*.min.js"
+        with tempfile.TemporaryDirectory() as d:
+            for ruta in rutas:
+                os.makedirs(os.path.join(d, os.path.dirname(ruta)), exist_ok=True)
+                open(os.path.join(d, ruta), "w").close()
+            subprocess.run(["git", "init", "-q", d], check=True)
+            subprocess.run(["git", "-C", d, "add", "."], check=True)
+            excl = [":(exclude)%s" % p for p in patrones.split("\n")]
+            incluidas = set(subprocess.run(
+                ["git", "-C", d, "ls-files", "--", "."] + excl, check=True,
+                capture_output=True, text=True).stdout.split())
+        with mock.patch.dict(os.environ, {"MISTRAL_EXCLUIDOS": patrones}):
+            for ruta in rutas:
+                with self.subTest(ruta=ruta):
+                    self.assertEqual(mr.excluido(ruta), ruta not in incluidas)
+
     def test_modelo_por_defecto_es_el_decidido(self):
         self.assertEqual(mr.MODELO, "zai-glm-5-3-flash")
 

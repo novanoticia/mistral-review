@@ -1,0 +1,27 @@
+[
+  {
+    "id": "c1-control",
+    "tipo": "positivo",
+    "control": true,
+    "base": "0000000000000000000000000000000000000001",
+    "cabeza": "0000000000000000000000000000000000000002",
+    "arreglo": "0000000000000000000000000000000000000003",
+    "defecto": "Control: un defecto evidente que se ve entero en el diff. Un revisor que no lo señale no ve defectos evidentes."
+  },
+  {
+    "id": "p1-defecto-real",
+    "tipo": "positivo",
+    "base": "0000000000000000000000000000000000000004",
+    "cabeza": "0000000000000000000000000000000000000005",
+    "arreglo": "0000000000000000000000000000000000000006",
+    "defecto": "Qué debería verse: el defecto real que corrigió el commit `arreglo`."
+  },
+  {
+    "id": "n1-falso-positivo",
+    "tipo": "negativo",
+    "base": "0000000000000000000000000000000000000007",
+    "cabeza": "0000000000000000000000000000000000000008",
+    "archivos": ["scripts/ejemplo.py"],
+    "defecto": "Hallazgos que una revisión anterior dio y se contrastaron como falsos."
+  }
+]
