@@ -91,11 +91,23 @@ Actions, y si no se puede leer el historial se revisa igualmente.
   evaluación y lo citó con sus dos líneas, y se perdía la revisión entera.
   El prompt sigue pidiendo una sola línea.
 
-El modelo se elige con la variable de Actions `MISTRAL_MODEL` (si falta,
-`codestral-latest`). Desde el 2026-11-15, por decisión del mantenedor, vale
-`zai-glm-5-3-flash`: la comparación con casos reales está en
-[`evaluacion-mistral.md`](evaluacion.md#resultados-2026-11-15).
+El modelo se elige con la variable de Actions `MISTRAL_MODEL`. Si falta, el
+script usa `zai-glm-5-3-flash`, por decisión del mantenedor del 2026-11-15
+(antes, `codestral-latest`): la comparación con casos reales está en
+[`evaluacion.md`](evaluacion.md#resultados-2026-11-15).
 La clave se configura como secreto `MISTRAL_API_KEY`.
+
+**Proveedor.** Desde la versión posterior a `v1.1`, la entrada `provider`
+(variable `MISTRAL_PROVIDER` en los ejemplos) permite usar OpenRouter en vez
+de la API de Mistral, con su secreto `OPENROUTER_API_KEY`; vacía, todo sigue
+como antes. Es lo único que cambia: el diff, el contexto, el prompt, la
+validación de citas y el informe son los mismos. Con OpenRouter el modelo es
+obligatorio y debe tener la forma `organización/modelo`; si falta o tiene
+forma de modelo de Mistral, el job falla sin llamar a ninguna API, para no
+cambiar de modelo en silencio. OpenRouter puede responder HTTP 200 con un
+error y sin contenido: cuenta como revisión no completada
+(`error_proveedor`), nunca como «sin hallazgos». Configuración, privacidad y
+costes: [README](../README.md#usar-openrouter-opcional).
 
 ## Cómo se lee el informe
 
@@ -209,7 +221,9 @@ mantenedor. El token tiene `contents: read` y `pull-requests: write`.
 - El contraste usa el mismo modelo que la revisión (`MISTRAL_MODEL`), salvo
   que exista la variable de Actions `MISTRAL_REPLY_MODEL`: entonces usa esa
   solo aquí, para probar otro modelo (p. ej. `codestral-latest`) sin tocar la
-  revisión. El título del contraste publicado muestra el modelo usado.
+  revisión. El título del contraste publicado muestra el modelo usado. Usa
+  también el mismo proveedor (`provider`): con OpenRouter, `MISTRAL_REPLY_MODEL`
+  debe ser un modelo de OpenRouter (`organización/modelo`).
 - Solo se procesan automáticamente PR abiertos del propio repositorio. Como
   límite de coste, se omiten revisiones con más de seis fuentes y se explica
   en Actions; pueden contrastarse sus hallazgos individualmente de forma manual.

@@ -73,7 +73,8 @@ en `.github/workflows/` y los casos en `.github/eval/casos.json` (plantilla:
 - `solo`: ids separados por comas; vacío evalúa todos.
 - `modelo`: un modelo solo para esta evaluación (por ejemplo
   `mistral-large-2512` o `codestral-latest`). Vacío usa `MISTRAL_MODEL`. El
-  revisor de los PR no cambia: sirve para comparar modelos sin tocarlo.
+  revisor de los PR no cambia: sirve para comparar modelos sin tocarlo. Con
+  OpenRouter (`provider: openrouter`), un identificador `organización/modelo`.
 - `esfuerzo`: esfuerzo de razonamiento (`low`, `medium`, `high`) solo para
   esta evaluación. Vacío usa el del revisor. Si el modelo no lo admite, se
   retira solo y el informe lo dice.
@@ -94,7 +95,18 @@ formato (cita que no es una línea del diff, JSON incompleto…), el campo
 caracteres: así se sabe si el modelo vio el defecto aunque fallara el formato
 (GLM 5.3 Flash en el control, ejecución #7). Ese texto solo va al artefacto,
 nunca al resumen. Usa el secreto `MISTRAL_API_KEY` y la variable
-`MISTRAL_MODEL` del repositorio, como el revisor.
+`MISTRAL_MODEL` del repositorio, como el revisor; con OpenRouter, el secreto
+`OPENROUTER_API_KEY` y las variables `MISTRAL_PROVIDER` y, opcional,
+`OPENROUTER_PROVIDER` ([README](../README.md#usar-openrouter-opcional)).
+
+**Comparar proveedores y modelos.** Los casos y los criterios son los mismos
+para cualquier configuración. El encabezado del informe y el JSON del
+artefacto (`proveedor`, `ruta`, `modelo`, `esfuerzo`, `max_salida`) dicen
+qué se midió; dos ejecuciones solo se comparan si eso consta. Con OpenRouter,
+fija `OPENROUTER_PROVIDER`: si no, cada petición puede ir a un proveedor
+distinto y la comparación pierde sentido. Que una configuración encuentre más
+defectos en una ejecución no prueba que sea mejor: hacen falta varias
+repeticiones y etiquetar los hallazgos a mano.
 
 **Coste.** Cada revisión es una solicitud (dos si la respuesta llega mal
 formada). Con `mistral-large-latest` y razonamiento, del orden de 10.000
@@ -104,7 +116,9 @@ tope de 80 **peticiones HTTP reales** por ejecución, contadas en el
 transporte: incluye los reintentos por errores transitorios. Si se alcanza,
 la evaluación se detiene, publica lo que lleva marcado como incompleto y
 termina en error. El informe da los tokens de entrada y de salida que
-declara la API, para calcular el gasto con la tarifa del modelo. Un modelo
+declara la API, para calcular el gasto con la tarifa del modelo, y el coste
+cuando la API lo declara (OpenRouter, `usage.cost`, en créditos); si no lo
+declara (Mistral), lo dice y no lo estima. Un modelo
 que no admite el esfuerzo de razonamiento gasta una petición de más solo la
 primera vez: tras el rechazo, el resto de la ejecución ya no lo pide. Para
 probar barato: `solo` con un caso y una repetición.
