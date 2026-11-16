@@ -76,7 +76,8 @@ en `.github/workflows/` y los casos en `.github/eval/casos.json` (plantilla:
   revisor de los PR no cambia: sirve para comparar modelos sin tocarlo. Con
   OpenRouter (`provider: openrouter`), un identificador `organización/modelo`.
 - `esfuerzo`: esfuerzo de razonamiento (`low`, `medium`, `high`) solo para
-  esta evaluación. Vacío usa el del revisor. Si el modelo no lo admite, se
+  esta evaluación. Vacío usa el del revisor (con OpenRouter, no se envía y
+  el modelo usa el suyo). Si el modelo no lo admite, se
   retira solo y el informe lo dice.
 - `max_salida`: tope de tokens de salida por respuesta (`max_tokens`), de
   4.000 a 256.000, solo para esta evaluación. Vacío usa el del revisor

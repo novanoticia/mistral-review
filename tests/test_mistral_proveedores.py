@@ -92,6 +92,13 @@ class TestConfiguracion(unittest.TestCase):
             with self.assertRaises(mr.ConfiguracionInvalida):
                 mr.configuracion("deepseek/deepseek-v4.1-flash")
 
+    def test_rechaza_los_enrutadores_que_cambian_de_modelo(self):
+        for modelo in ("openrouter/auto", "openrouter/free"):
+            with self.subTest(modelo=modelo), entorno(
+                    MISTRAL_PROVEEDOR="openrouter", MISTRAL_MODEL=modelo):
+                with self.assertRaisesRegex(mr.ConfiguracionInvalida, "modelo concreto"):
+                    mr.configuracion()
+
     def test_ruta_de_openrouter_no_valida(self):
         for ruta in ("Z-AI", "z-ai;rm", "a/b/c/d/e", "https://x"):
             with self.subTest(ruta=ruta), entorno(
@@ -131,7 +138,9 @@ class TestPeticion(unittest.TestCase):
         # Sin cabeceras de atribución: no se anuncia el repo en OpenRouter.
         self.assertIsNone(req.get_header("Http-referer"))
         self.assertEqual(cuerpo["response_format"], {"type": "json_object"})
-        self.assertEqual(cuerpo["reasoning_effort"], mr.ESFUERZO)
+        # Con require_parameters, un modelo que no los admita no tendría proveedor.
+        self.assertNotIn("reasoning_effort", cuerpo)
+        self.assertNotIn("temperature", cuerpo)
         self.assertEqual(cuerpo["max_tokens"], mr.MAX_SALIDA)
         self.assertEqual(cuerpo["provider"], {"require_parameters": True,
                                               "allow_fallbacks": False,
@@ -139,6 +148,20 @@ class TestPeticion(unittest.TestCase):
         _, cuerpo = self.enviar(proveedor="openrouter", ruta="z-ai")
         self.assertEqual(cuerpo["provider"]["order"], ["z-ai"])
         self.assertFalse(cuerpo["provider"]["allow_fallbacks"])
+        # Solo con un esfuerzo explícito (lo fija la evaluación con --esfuerzo).
+        with mock.patch.object(mr, "ESFUERZO_OPENROUTER", "high"):
+            _, cuerpo = self.enviar(proveedor="openrouter")
+        self.assertEqual(cuerpo["reasoning_effort"], "high")
+        self.assertNotIn("temperature", cuerpo)
+
+    def test_openrouter_no_retira_el_modo_json_tras_un_400(self):
+        error = urllib.error.HTTPError(mr.API_OPENROUTER, 400, "e", {},
+                                       io.BytesIO(b"response_format json_object is not supported"))
+        with mock.patch.object(mr.urllib.request, "urlopen", side_effect=[
+                error, respuesta_http(eleccion())]) as abrir:
+            with self.assertRaises(urllib.error.HTTPError):
+                mr.llamar_mistral([], "m/x", "clave", proveedor="openrouter")
+        self.assertEqual(abrir.call_count, 1)
 
 
 class TestRespuestas(unittest.TestCase):
@@ -360,7 +383,7 @@ class TestEvaluacionConProveedor(unittest.TestCase):
         from tests.test_mistral_eval import ev, POSITIVO
         self.ev, self.positivo = ev, POSITIVO
 
-    def main(self, argv, variables):
+    def main(self, argv, variables, efecto=None):
         import tempfile
         from contextlib import redirect_stdout
         ev = self.ev
@@ -373,7 +396,8 @@ class TestEvaluacionConProveedor(unittest.TestCase):
             ruta = os.path.join(d, "r.json")
             with mock.patch.dict(os.environ, base), \
                     mock.patch.object(ev, "cargar_casos", return_value=[self.positivo]), \
-                    mock.patch.object(ev, "revisar", return_value=registro) as revisar, \
+                    mock.patch.object(ev, "revisar", return_value=registro,
+                                      side_effect=efecto) as revisar, \
                     mock.patch.object(ev.mr, "escribir_resumen"), redirect_stdout(salida):
                 codigo = ev.main(["--ejecutar", "--repeticiones", "1", "--salida", ruta]
                                  + argv)
@@ -438,6 +462,43 @@ class TestEvaluacionConProveedor(unittest.TestCase):
                                   proveedor="openrouter", ruta="z-ai")
         self.assertEqual(registro["estado"], "valida")
         self.assertEqual(api.call_args.kwargs, {"proveedor": "openrouter", "ruta": "z-ai"})
+
+    def test_error_del_proveedor_no_cuenta_como_cortada(self):
+        from tests.test_mistral_eval import DIFF
+        ev = self.ev
+        for causa, estado in (("error_proveedor", "error"), ("error", "error"),
+                              ("length", "cortada")):
+            with self.subTest(causa=causa), \
+                    mock.patch.object(ev.mr, "obtener_diff", return_value=DIFF), \
+                    mock.patch.object(ev.mr, "obtener_rutas_diff", return_value={"a.py"}), \
+                    mock.patch.object(ev.mr, "obtener_contexto", return_value=""), \
+                    mock.patch.object(ev.mr, "leer_guia", return_value=(None, "")), \
+                    mock.patch.object(ev, "git", return_value="asunto\n"), \
+                    mock.patch.object(ev.mr, "llamar_mistral",
+                                      side_effect=ev.mr.RespuestaIncompleta(causa)):
+                registro = ev.revisar(self.positivo, "z-ai/x", "k", proveedor="openrouter")
+            self.assertEqual((registro["estado"], registro["detalle"]), (estado, causa))
+
+    def test_esfuerzo_con_openrouter_solo_si_se_pide(self):
+        vistos = []
+        registro = {"estado": "valida", "detalle": "", "solicitudes": 1,
+                    "recortado": False, "hallazgos": [], "pendientes": []}
+
+        def revisar(*_, **__):
+            vistos.append(self.ev.mr.ESFUERZO_OPENROUTER)
+            return dict(registro)
+
+        variables = {"MISTRAL_PROVEEDOR": "openrouter", "MISTRAL_MODEL": "z-ai/glm-5.3-flash",
+                     "OPENROUTER_API_KEY": CLAVE_OR}
+        for argv, esperado in (([], ""), (["--esfuerzo", "medium"], "medium")):
+            with self.subTest(argv=argv):
+                codigo, _, salida, guardado = self.main(argv, variables, efecto=revisar)
+            self.assertEqual((codigo, vistos[-1], guardado["esfuerzo"]), (0, esperado, esperado))
+            if not esperado:
+                self.assertIn("pedido: `ninguno, el del modelo`", salida)
+                # No pedirlo no es que el modelo lo rechace.
+                self.assertNotIn("no admite el esfuerzo", salida)
+        self.assertEqual(self.ev.mr.ESFUERZO_OPENROUTER, "")   # se restaura
 
     def test_suma_el_coste_que_declara_la_api(self):
         ev = self.ev

@@ -100,6 +100,12 @@ def configuracion(modelo=""):
         raise ConfiguracionInvalida(
             "el modelo de OpenRouter debe tener la forma `organización/modelo`; "
             "un identificador de la API de Mistral no sirve")
+    if modelo.startswith("openrouter/"):
+        # `openrouter/auto` y similares eligen el modelo en cada petición: el
+        # informe mostraría un nombre que no dice qué modelo revisó.
+        raise ConfiguracionInvalida(
+            "los enrutadores de OpenRouter cambian de modelo en cada petición; "
+            "indica un modelo concreto")
     if ruta and not _RUTA_OPENROUTER.fullmatch(ruta):
         raise ConfiguracionInvalida(
             "openrouter_provider debe ser un identificador de proveedor de OpenRouter")
@@ -563,6 +569,12 @@ INTENTOS_RESPUESTA = 2
 # entero en ello (email-triage-plugin#202: 31.129 caracteres de razonamiento, ninguno de
 # respuesta). Si el modelo no admite el parámetro, se retira y se repite.
 ESFUERZO = "low"
+# Con OpenRouter no se envían `temperature` ni `reasoning_effort`: con
+# `require_parameters`, un modelo cuyos proveedores no admitan alguno (los
+# que no razonan, o los que retiraron `temperature`) se quedaría sin
+# proveedor y la revisión fallaría siempre. Vacío = no se envía; la
+# evaluación lo fija si se pide un esfuerzo explícito.
+ESFUERZO_OPENROUTER = ""
 
 
 class RespuestaIncompleta(ValueError):
@@ -658,6 +670,9 @@ def cuerpo_peticion(mensajes, modelo, proveedor="mistral", ruta="", json_mode=Tr
     if json_mode:
         cuerpo["response_format"] = {"type": "json_object"}
     if proveedor == "openrouter":
+        del cuerpo["temperature"], cuerpo["reasoning_effort"]
+        if ESFUERZO_OPENROUTER:
+            cuerpo["reasoning_effort"] = ESFUERZO_OPENROUTER
         preferencias = {"require_parameters": True, "allow_fallbacks": False,
                         "data_collection": "deny"}
         if ruta:
@@ -704,7 +719,9 @@ def llamar_mistral(mensajes, modelo, clave, json_mode=True, proveedor="mistral",
                     del cuerpo["reasoning_effort"]
                     print("::warning::El modelo no admite reasoning_effort; se retira.")
                     continue  # comparte el presupuesto total de tres solicitudes
-                if "response_format" in cuerpo and (
+                # Solo Mistral: en OpenRouter retirar el modo JSON sería el cambio
+                # silencioso que `require_parameters` debe impedir.
+                if proveedor == "mistral" and "response_format" in cuerpo and (
                         "response_format" in detalle or "json_object" in detalle) and any(
                         palabra in detalle for palabra in
                         ("not supported", "unsupported", "does not support")):

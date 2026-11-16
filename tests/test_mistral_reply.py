@@ -682,7 +682,8 @@ class TestModeloContraste(unittest.TestCase):
                    "MISTRAL_REPLY_MODEL": "codestral-latest"}, "codestral-latest"))
         for entorno, esperado in casos:
             with self.subTest(entorno=entorno), mock.patch.dict(os.environ, entorno, clear=True):
-                self.assertEqual(reply.modelo_contraste(), esperado)
+                self.assertEqual(
+                    mr.configuracion(os.environ.get("MISTRAL_REPLY_MODEL", ""))[1], esperado)
 
 
 if __name__ == "__main__":

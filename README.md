@@ -127,6 +127,12 @@ la API. `OPENROUTER_PROVIDER` se ignora con un aviso y el secreto puede quedarse
   no salta a otro.
 - `data_collection: "deny"`: solo proveedores que, según OpenRouter, no
   guardan los datos.
+- Sin `temperature` ni `reasoning_effort` (con Mistral sí se envían): con
+  `require_parameters`, un modelo que no admita alguno se quedaría sin
+  proveedor. Los modelos que razonan usan su esfuerzo por defecto; la
+  evaluación puede fijar otro con `esfuerzo`.
+- No se admiten los enrutadores de OpenRouter (`openrouter/auto` y
+  similares): eligen un modelo distinto en cada petición.
 
 **Privacidad.** Con OpenRouter el diff, la guía y el contexto del PR pasan
 por **dos empresas**: OpenRouter y el proveedor final, cada una con sus

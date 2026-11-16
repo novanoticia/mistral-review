@@ -84,8 +84,11 @@ class Presupuesto:
     el tope anunciado (Codex, email-triage-plugin#203). El tope se aplica en el transporte.
     """
 
-    def __init__(self, maximo, espera=None):
+    def __init__(self, maximo, espera=None, con_esfuerzo=True):
         self.maximo, self.usadas, self.espera = maximo, 0, espera
+        # Sin esfuerzo pedido (OpenRouter por defecto), que falte en la
+        # petición no significa que el modelo lo haya rechazado.
+        self.con_esfuerzo = con_esfuerzo
         # Consumo real que declara la API en `usage`: el coste deja de ser una
         # estimación. `sin_esfuerzo` cuenta las respuestas obtenidas tras
         # retirar `reasoning_effort` (el modelo no lo admite): ahí el esfuerzo
@@ -128,7 +131,7 @@ class Presupuesto:
             self.coste += coste
             self.con_coste += 1
         try:
-            if "reasoning_effort" not in json.loads(req.data):
+            if self.con_esfuerzo and "reasoning_effort" not in json.loads(req.data):
                 self.sin_esfuerzo += 1
                 self.omitir_esfuerzo = True
         except (ValueError, AttributeError, TypeError):
@@ -186,13 +189,15 @@ class _Respuesta:
 
 
 @contextlib.contextmanager
-def con_esfuerzo(valor):
-    """Fija `mr.ESFUERZO` mientras dura la evaluación y lo restaura al salir."""
-    previo, mr.ESFUERZO = mr.ESFUERZO, valor
+def con_esfuerzo(valor, atributo="ESFUERZO"):
+    """Fija `mr.ESFUERZO` (o `mr.ESFUERZO_OPENROUTER`) mientras dura la
+    evaluación y lo restaura al salir."""
+    previo = getattr(mr, atributo)
+    setattr(mr, atributo, valor)
     try:
         yield
     finally:
-        mr.ESFUERZO = previo
+        setattr(mr, atributo, previo)
 
 
 @contextlib.contextmanager
@@ -389,8 +394,14 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
     except (urllib.error.URLError, TimeoutError):
         registro.update(estado="error", detalle="conexión")
         return registro
-    except ValueError as fallo:
-        registro.update(estado="cortada", detalle=getattr(fallo, "causa", "") or "incompleta")
+    except mr.RespuestaIncompleta as fallo:
+        # Solo `length` es una salida cortada; `error_proveedor` o `error`
+        # son fallos del proveedor y no se arreglan subiendo `--max-salida`.
+        registro.update(estado="cortada" if fallo.causa == "length" else "error",
+                        detalle=fallo.causa or "incompleta")
+        return registro
+    except ValueError:
+        registro.update(estado="cortada", detalle="incompleta")
         return registro
     if resultado is None:
         return registro
@@ -552,8 +563,9 @@ def main(argv=None):
     if proveedor == "mistral" and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,79}", modelo):
         print("::error::Modelo no válido: solo letras, números, punto, guion y dos puntos.")
         return 2
-    esfuerzo = args.esfuerzo.strip() or mr.ESFUERZO
-    if esfuerzo not in ESFUERZOS:
+    # Con OpenRouter, sin `--esfuerzo` no se envía (ver mr.ESFUERZO_OPENROUTER).
+    esfuerzo = args.esfuerzo.strip() or (mr.ESFUERZO if proveedor == "mistral" else "")
+    if esfuerzo and esfuerzo not in ESFUERZOS:
         print("::error::Esfuerzo no válido: usa %s." % ", ".join(ESFUERZOS))
         return 2
     texto_salida = args.max_salida.strip()
@@ -585,8 +597,10 @@ def main(argv=None):
                 "casos": casos, "resultados": resultados}
 
     # Solo cambia en este proceso: el revisor de los PR sigue con el suyo.
-    with con_esfuerzo(esfuerzo), con_max_salida(max_salida), \
-            Presupuesto(MAX_LLAMADAS, espera_para(max_salida)) as presupuesto:
+    with con_esfuerzo(esfuerzo or mr.ESFUERZO), \
+            con_esfuerzo(esfuerzo if proveedor == "openrouter" else "", "ESFUERZO_OPENROUTER"), \
+            con_max_salida(max_salida), \
+            Presupuesto(MAX_LLAMADAS, espera_para(max_salida), bool(esfuerzo)) as presupuesto:
         try:
             for c in casos:
                 for n in range(args.repeticiones):
@@ -613,7 +627,7 @@ def main(argv=None):
                 "con recuento. Esfuerzo de razonamiento pedido: `%s`. Tope de salida: "
                 "%d tokens por respuesta, con %d s de espera.\n" % (
                     presupuesto.entrada, presupuesto.salida, presupuesto.respondidas,
-                    esfuerzo, max_salida, presupuesto.espera))
+                    esfuerzo or "ninguno, el del modelo", max_salida, presupuesto.espera))
     if presupuesto.con_coste:
         informe += ("\nCoste según la API: %.6f créditos en %d de %d respuesta(s) con "
                     "recuento.\n" % (presupuesto.coste, presupuesto.con_coste,

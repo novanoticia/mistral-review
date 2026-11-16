@@ -456,15 +456,6 @@ def avisar_fallo(repo, numero, fuentes, cabeza, motivo, diagnostico=(), comentar
         mr.publicar(repo, numero, cuerpo)
 
 
-def modelo_contraste():
-    """Modelo del contraste: `MISTRAL_REPLY_MODEL` permite probar otro solo
-    aquí sin cambiar el de la revisión; sin ella, el mismo `MISTRAL_MODEL`
-    que la revisión, y sin ninguna, el modelo por defecto del revisor
-    (`mr.MODELO`; antes de mistral-review era `codestral-latest`). Con
-    OpenRouter no hay modelo por defecto: `mr.configuracion` lo exige."""
-    return mr.configuracion(os.environ.get("MISTRAL_REPLY_MODEL", ""))[1]
-
-
 def main():
     with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as fh:
         evento = json.load(fh)
