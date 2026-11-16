@@ -400,13 +400,21 @@ def interpretar_respuestas(texto, fuentes, evidencias, diagnostico=None):
     return respuestas
 
 
-def renderizar(respuestas, fuentes, modelo, cabeza, url):
+def _cabecera(modelo, proveedor="mistral", ruta=""):
+    """Quién contrasta: Mistral, o el modelo elegido vía la pasarela OpenRouter."""
+    if proveedor == "openrouter":
+        return "Contraste vía OpenRouter (`%s`%s)" % (
+            modelo, ", proveedor `%s`" % ruta if ruta else "")
+    return "Contraste de [Mistral AI (@mistralai)](https://github.com/mistralai) (`%s`)" % modelo
+
+
+def renderizar(respuestas, fuentes, modelo, cabeza, url, proveedor="mistral", ruta=""):
     def texto_modelo(valor, limite):
         # No convertir texto del modelo en menciones de bots ni en marcas
         # ocultas que pudieran suplantar respuestas a otras fuentes.
         return mr._linea(valor, limite).replace("@", "@\u200b").replace("<!--", "<\u200b!--")
 
-    partes = ["## Contraste de [Mistral AI (@mistralai)](https://github.com/mistralai) (`%s`)" % modelo,
+    partes = ["## " + _cabecera(modelo, proveedor, ruta),
               "Commit contrastado: `%s`. [Ejecución de Actions](%s)." % (cabeza, url),
               "Análisis por lectura, sin ejecutar tests ni aplicar parches. "
               "Las reparaciones corresponden a Claude y al mantenedor."]
@@ -425,14 +433,17 @@ def renderizar(respuestas, fuentes, modelo, cabeza, url):
     return mr.mask_secrets("\n\n".join(partes))
 
 
-def avisar_fallo(repo, numero, fuentes, cabeza, motivo, diagnostico=(), comentar=True):
+def avisar_fallo(repo, numero, fuentes, cabeza, motivo, diagnostico=(), comentar=True,
+                 proveedor="mistral"):
     """Hace visible un fallo sin convertirlo en un dictamen ni deduplicarlo.
 
     `diagnostico` solo lleva códigos propios de `interpretar_respuestas`.
     Con `comentar=False` el aviso queda en el resumen de Actions y no en el
     PR: un rechazo del modelo no dice nada del código (email-triage-plugin#200)."""
     partes = ["<!-- mistral-reply-error -->",
-              "## Contraste de [Mistral AI (@mistralai)](https://github.com/mistralai) no completado",
+              "## Contraste %s no completado" % (
+                  "vía OpenRouter" if proveedor == "openrouter"
+                  else "de [Mistral AI (@mistralai)](https://github.com/mistralai)"),
               "Commit: `%s`. %s. No se ha aplicado ningún parche; "
               "este aviso no confirma ni refuta los hallazgos." % (cabeza, motivo)]
     if diagnostico:
@@ -443,15 +454,6 @@ def avisar_fallo(repo, numero, fuentes, cabeza, motivo, diagnostico=(), comentar
     mr.escribir_resumen(cuerpo)
     if comentar:
         mr.publicar(repo, numero, cuerpo)
-
-
-def modelo_contraste():
-    """Modelo del contraste: `MISTRAL_REPLY_MODEL` permite probar otro solo
-    aquí sin cambiar el de la revisión; sin ella, el mismo `MISTRAL_MODEL`
-    que la revisión, y sin ninguna, el modelo por defecto del revisor
-    (`mr.MODELO`; antes de mistral-review era `codestral-latest`)."""
-    return (os.environ.get("MISTRAL_REPLY_MODEL") or os.environ.get("MISTRAL_MODEL")
-            or mr.MODELO)
 
 
 def main():
@@ -476,19 +478,28 @@ def main():
     if len(fuentes) > MAX_FUENTES:
         mr.escribir_resumen("Contraste omitido: más de %d fuentes; no se envía una revisión incompleta." % MAX_FUENTES)
         return 1
-    clave = os.environ.get("MISTRAL_API_KEY")
+    try:
+        # Mismo proveedor que la revisión; el modelo, el del contraste.
+        proveedor, modelo, ruta = mr.configuracion(os.environ.get("MISTRAL_REPLY_MODEL", ""))
+    except mr.ConfiguracionInvalida as fallo:
+        mr.escribir_resumen("Contraste no ejecutado por configuración: %s." % fallo)
+        print("::error::Contraste no ejecutado por configuración: %s." % fallo)
+        return 1
+    nombre = mr.PROVEEDORES[proveedor]["nombre"]
+    secreto = mr.PROVEEDORES[proveedor]["secreto"]
+    clave = os.environ.get(secreto)
     if not clave:
-        mr.escribir_resumen("Contraste omitido: MISTRAL_API_KEY no disponible.")
+        mr.escribir_resumen("Contraste omitido: %s no disponible." % secreto)
         return 0
     # Solo obtiene objetos; no cambia de rama ni ejecuta archivos del PR.
     subprocess.run(["git", "fetch", "--no-tags", "origin", "refs/pull/%d/head" % numero],
                    check=True, capture_output=True)
     mensajes, evidencias = construir_mensajes(fuentes, pr)
-    modelo = modelo_contraste()
     try:
-        texto = mr.llamar_mistral(mensajes, modelo, clave)
+        texto = mr.llamar_mistral(mensajes, modelo, clave, proveedor=proveedor, ruta=ruta)
     except (ValueError, OSError, urllib.error.URLError):
-        avisar_fallo(repo, numero, fuentes, cabeza, "Falló la API o su respuesta quedó incompleta")
+        avisar_fallo(repo, numero, fuentes, cabeza, "Falló la API o su respuesta quedó incompleta",
+                     proveedor=proveedor)
         return 1
     diagnostico = []
     respuestas = interpretar_respuestas(texto, fuentes, evidencias, diagnostico)
@@ -498,10 +509,10 @@ def main():
         # diagnóstico queda en el resumen de Actions. Por eso se sale con 0 y `::warning::`;
         # un `::error::` dejaría una cruz roja sin nada roto en el PR. Los
         # fallos de API, GitHub o lectura siguen saliendo con 1.
-        print("::warning::Contraste de Mistral rechazado: " + ", ".join(diagnostico))
+        print("::warning::Contraste de %s rechazado: %s" % (nombre, ", ".join(diagnostico)))
         avisar_fallo(repo, numero, fuentes, cabeza,
                      "La respuesta no supera la validación de fuentes, formato o citas",
-                     diagnostico, comentar=False)
+                     diagnostico, comentar=False, proveedor=proveedor)
         return 0
     # No atribuir el contexto antiguo al HEAD si hubo un push durante la API.
     if api("repos/%s/pulls/%d" % (repo, numero))["head"]["sha"] != cabeza:
@@ -517,14 +528,15 @@ def main():
     servidor = os.environ.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
     url = "%s/%s/actions/runs/%s/attempts/%s" % (servidor, repo,
         os.environ["GITHUB_RUN_ID"], os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
-    mr.escribir_resumen(renderizar(respuestas, fuentes, modelo, cabeza, url))
+    mr.escribir_resumen(renderizar(respuestas, fuentes, modelo, cabeza, url, proveedor, ruta))
     # Al PR solo va lo que concluye algo. «Falta contexto» queda en el
     # resumen, sin marca: otra ejecución puede volver a intentarlo.
     concluyentes = [r for r in respuestas if r["veredicto"] != "pendiente"]
     if not concluyentes:
         print("Contraste sin dictamen (falta contexto): queda en el resumen de Actions.")
         return 0
-    mr.publicar(repo, numero, renderizar(concluyentes, fuentes, modelo, cabeza, url))
+    mr.publicar(repo, numero, renderizar(concluyentes, fuentes, modelo, cabeza, url,
+                                         proveedor, ruta))
     return 0
 
 

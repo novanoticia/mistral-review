@@ -392,7 +392,7 @@ class TestGuardadoParcial(unittest.TestCase):
             ruta = os.path.join(d, "r.json")
             vistos = []
 
-            def revisar(caso, modelo, clave):
+            def revisar(caso, modelo, clave, **_):
                 # Lo que hay en disco ANTES de cada revision.
                 if os.path.exists(ruta):
                     with open(ruta, encoding="utf-8") as fh:
@@ -535,7 +535,7 @@ class TestMain(unittest.TestCase):
                         "recortado": False, "hallazgos": [], "pendientes": []}
             with mock.patch.dict(os.environ, con_clave), \
                     mock.patch.object(ev, "cargar_casos", return_value=[POSITIVO]), \
-                    mock.patch.object(ev, "revisar", side_effect=lambda c, m, k: (
+                    mock.patch.object(ev, "revisar", side_effect=lambda c, m, k, **_: (
                         vistos.append((m, mr.ESFUERZO)), dict(registro))[1]), \
                     mock.patch.object(mr, "escribir_resumen"), redirect_stdout(salida):
                 codigo = ev.main(["--ejecutar", "--repeticiones", "1", "--salida", ruta,
@@ -561,7 +561,7 @@ class TestMain(unittest.TestCase):
             salida = io.StringIO()
             with mock.patch.dict(os.environ, {"MISTRAL_API_KEY": "clave"}), \
                     mock.patch.object(ev, "cargar_casos", return_value=[POSITIVO]), \
-                    mock.patch.object(ev, "revisar", side_effect=lambda c, m, k: (
+                    mock.patch.object(ev, "revisar", side_effect=lambda c, m, k, **_: (
                         vistos.append(mr.MAX_SALIDA), dict(registro))[1]), \
                     mock.patch.object(mr, "escribir_resumen"), redirect_stdout(salida):
                 codigo = ev.main(["--ejecutar", "--repeticiones", "1", "--salida", ruta,

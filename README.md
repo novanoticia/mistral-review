@@ -1,7 +1,7 @@
 # mistral-review
 
-Revisor de pull requests con la API de Mistral, **reutilizable desde otros
-repos**. Cada repo lo llama con un workflow corto; el código vive solo aquí, así
+Revisor de pull requests con la API de Mistral (u, opcionalmente,
+[OpenRouter](#usar-openrouter-opcional)), **reutilizable desde otros repos**. Cada repo lo llama con un workflow corto; el código vive solo aquí, así
 que una mejora se hace una vez y llega a todos.
 
 Es una **segunda opinión barata**, no un detector fiable: en una evaluación con
@@ -44,14 +44,120 @@ informe por commit, modelos que razonan…): [docs/revision.md](docs/revision.md
 
 | Parámetro | Para qué | Por defecto |
 |---|---|---|
-| `model` | Modelo de Mistral | `zai-glm-5-3-flash` |
+| `model` | Modelo. Con OpenRouter, **obligatorio** (`organización/modelo`) | con Mistral, `zai-glm-5-3-flash` |
+| `provider` | `mistral` u `openrouter` | vacío = `mistral` |
+| `openrouter_provider` | Solo con OpenRouter: proveedor final fijo (p. ej. `z-ai`) | vacío = lo elige OpenRouter |
 | `excluded` | Archivos que no se revisan (generados), uno por línea | ninguno |
 | `guides` | Archivos de guía, por orden de preferencia | `REVIEW.md`, `AGENTS.md`, `CLAUDE.md` |
 | `ref` | Rama o etiqueta de este repo cuyo script se ejecuta | `main` |
 
-`ref` debe coincidir con lo que pongas tras `@` en `uses:`. Hoy todos usan
-`main`; cuando haya una etiqueta (`v1`), se puede fijar en ambos sitios para que
-un cambio aquí no llegue a todos los repos sin control.
+`ref` debe coincidir con lo que pongas tras `@` en `uses:` (por ejemplo `@v1`
+y `ref: v1`): así un cambio aquí no llega a todos los repos sin control.
+
+### Secretos (`secrets:`)
+
+| Secreto | Cuándo es obligatorio |
+|---|---|
+| `MISTRAL_API_KEY` | Con `provider` vacío o `mistral` |
+| `OPENROUTER_API_KEY` | Con `provider: openrouter` |
+
+Cada proveedor lee solo su clave: con Mistral no hace falta la de OpenRouter,
+ni al revés. Si falta la del proveedor elegido, la revisión se omite sin
+fallar (es lo que pasa en los PR de forks, que no reciben secretos); el
+resumen de Actions dice qué secreto falta.
+
+## Usar OpenRouter (opcional)
+
+[OpenRouter](https://openrouter.ai) es una **pasarela**: una sola API y una
+sola clave para modelos de muchas empresas. No es un modelo: el modelo se
+elige aparte (`model`), y detrás de cada modelo puede haber varios
+**proveedores finales** (las empresas que lo ejecutan), con precios,
+versiones comprimidas (cuantización) y políticas de datos distintas. Mistral
+sigue siendo el proveedor por defecto; OpenRouter sirve sobre todo para
+probar modelos que Mistral no ofrece.
+
+**Requisito:** una versión de mistral-review que incluya OpenRouter (la
+primera etiqueta publicada después de `v1.1`). Con una versión anterior,
+GitHub rechaza el workflow si le pasas `provider` u `OPENROUTER_API_KEY`.
+
+Pasos, desde la web de GitHub en el repo que se revisa:
+
+1. Crea una clave en [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys).
+   Conviene ponerle un **límite de gasto** al crearla.
+2. **Settings → Secrets and variables → Actions → Secrets → New repository
+   secret**: nombre `OPENROUTER_API_KEY`, valor la clave.
+3. Pestaña **Variables → New repository variable**:
+   - `MISTRAL_PROVIDER` = `openrouter`;
+   - `MISTRAL_MODEL` = el identificador exacto del modelo en OpenRouter, con
+     la forma `organización/modelo` (por ejemplo `z-ai/glm-5.3-flash`); se
+     copia de la página del modelo en [openrouter.ai/models](https://openrouter.ai/models);
+   - opcional, `OPENROUTER_PROVIDER` = el proveedor final, para que todas las
+     revisiones salgan del mismo (por ejemplo `z-ai`); la página del modelo
+     en OpenRouter lista sus proveedores.
+4. En `.github/workflows/mistral-review.yml`, edita el archivo (icono del
+   lápiz) y añade, como en [`ejemplos/mistral-review.yml`](ejemplos/mistral-review.yml):
+   ```yaml
+       with:
+         provider: ${{ vars.MISTRAL_PROVIDER }}
+         openrouter_provider: ${{ vars.OPENROUTER_PROVIDER }}
+       secrets:
+         OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+   ```
+   (junto a lo que ya hay en `with:` y `secrets:`; `uses:` y `ref` deben
+   apuntar a la versión con OpenRouter). Lo mismo en `mistral-reply.yml` y
+   `mistral-eval.yml` si los usas.
+
+El comentario del PR dirá «Revisión vía OpenRouter (`modelo`)». Si el modelo
+falta o tiene forma de identificador de Mistral (`zai-glm-5-3-flash`), el
+check falla con un mensaje claro **sin llamar a ninguna API** ni cambiar de
+modelo por su cuenta.
+
+**Volver a Mistral:** en **Variables**, borra `MISTRAL_PROVIDER` (o déjala en
+`mistral`) y devuelve `MISTRAL_MODEL` a un modelo de Mistral (o bórrala para
+usar `zai-glm-5-3-flash`). **Las dos cosas**: si queda un identificador de
+OpenRouter (con `/`), el check falla con un mensaje que lo dice, sin llamar a
+la API. `OPENROUTER_PROVIDER` se ignora con un aviso y el secreto puede quedarse.
+
+**Cómo se configura la petición** (fijo, no se elige):
+
+- `require_parameters`: solo proveedores que admiten todo lo que se pide.
+  OpenRouter ignora en silencio un parámetro no admitido; sin esto el modo
+  JSON podría desaparecer sin aviso.
+- `allow_fallbacks: false`: si el proveedor elegido falla, la revisión falla;
+  no salta a otro.
+- `data_collection: "deny"`: solo proveedores que, según OpenRouter, no
+  guardan los datos.
+- Sin `temperature` ni `reasoning_effort` (con Mistral sí se envían): con
+  `require_parameters`, un modelo que no admita alguno se quedaría sin
+  proveedor. Los modelos que razonan usan su esfuerzo por defecto; la
+  evaluación puede fijar otro con `esfuerzo`.
+- No se admiten los enrutadores de OpenRouter (`openrouter/auto` y
+  similares): eligen un modelo distinto en cada petición.
+
+**Privacidad.** Con OpenRouter el diff, la guía y el contexto del PR pasan
+por **dos empresas**: OpenRouter y el proveedor final, cada una con sus
+condiciones. `data_collection: "deny"` filtra según lo que OpenRouter sabe de
+cada proveedor, que según su propia documentación no es una fuente definitiva.
+Los secretos evidentes se tachan antes de enviar, igual que con Mistral.
+
+**Costes.** OpenRouter cobra por adelantado (créditos) y el precio depende
+del proveedor final: el mismo modelo puede costar varias veces más en uno que
+en otro. Sin `openrouter_provider`, OpenRouter elige en cada petición y el
+coste varía. La evaluación muestra el coste que declara la API (`usage.cost`,
+en créditos); con Mistral lo dice como no disponible y no lo estima.
+
+**Limitaciones conocidas:**
+
+- No se ha ejecutado aún ninguna revisión real con OpenRouter.
+- No hay modelo por defecto: cada repo elige el suyo.
+- Sin `openrouter_provider`, dos revisiones del mismo PR pueden salir de
+  proveedores (y cuantizaciones) distintos: no son comparables entre sí.
+- Si ningún proveedor del modelo cumple las condiciones de arriba (por
+  ejemplo, admitir el modo JSON), OpenRouter responde con error y la revisión
+  falla de forma visible: hay que elegir otro modelo o proveedor.
+- Un modelo que agota el tope de salida razonando se pide una segunda vez,
+  como con Mistral; OpenRouter avisa de que en ese caso repetir no suele
+  ayudar, y la segunda solicitud también se cobra.
 
 ## Contraste de revisiones de otras IAs (opcional)
 
@@ -85,8 +191,9 @@ resultados medidos en `email-triage-plugin`: [docs/evaluacion.md](docs/evaluacio
 ## Coste
 
 Con `zai-glm-5-3-flash` (0,15 / 0,50 USD por millón de tokens de entrada /
-salida), del orden de **medio céntimo por revisión**. Los PR de forks no
-reciben el secreto: la revisión se omite sin fallar.
+salida), del orden de **medio céntimo por revisión**. Con OpenRouter depende
+del modelo y del proveedor final ([costes](#usar-openrouter-opcional)). Los PR
+de forks no reciben el secreto: la revisión se omite sin fallar.
 
 ## Desarrollo
 

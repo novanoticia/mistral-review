@@ -84,13 +84,19 @@ class Presupuesto:
     el tope anunciado (Codex, email-triage-plugin#203). El tope se aplica en el transporte.
     """
 
-    def __init__(self, maximo, espera=None):
+    def __init__(self, maximo, espera=None, con_esfuerzo=True):
         self.maximo, self.usadas, self.espera = maximo, 0, espera
+        # Sin esfuerzo pedido (OpenRouter por defecto), que falte en la
+        # petición no significa que el modelo lo haya rechazado.
+        self.con_esfuerzo = con_esfuerzo
         # Consumo real que declara la API en `usage`: el coste deja de ser una
         # estimación. `sin_esfuerzo` cuenta las respuestas obtenidas tras
         # retirar `reasoning_effort` (el modelo no lo admite): ahí el esfuerzo
         # pedido no se aplicó.
         self.entrada = self.salida = self.respondidas = self.sin_esfuerzo = 0
+        # Coste que declara OpenRouter en `usage.cost` (créditos). Mistral no
+        # lo envía: entonces se dice que falta, sin estimarlo.
+        self.coste, self.con_coste = 0.0, 0
         # Tras el primer rechazo de `reasoning_effort`, las demás peticiones ya
         # salen sin él: cada revisión gastaba una petición rechazada (400) y
         # otra buena (ejecuciones #3 y #4: 26 y 24 de 80).
@@ -120,8 +126,12 @@ class Presupuesto:
         self.entrada += entrada
         self.salida += salida
         self.respondidas += 1
+        coste = uso.get("cost")
+        if isinstance(coste, (int, float)) and not isinstance(coste, bool) and coste >= 0:
+            self.coste += coste
+            self.con_coste += 1
         try:
-            if "reasoning_effort" not in json.loads(req.data):
+            if self.con_esfuerzo and "reasoning_effort" not in json.loads(req.data):
                 self.sin_esfuerzo += 1
                 self.omitir_esfuerzo = True
         except (ValueError, AttributeError, TypeError):
@@ -179,13 +189,15 @@ class _Respuesta:
 
 
 @contextlib.contextmanager
-def con_esfuerzo(valor):
-    """Fija `mr.ESFUERZO` mientras dura la evaluación y lo restaura al salir."""
-    previo, mr.ESFUERZO = mr.ESFUERZO, valor
+def con_esfuerzo(valor, atributo="ESFUERZO"):
+    """Fija `mr.ESFUERZO` (o `mr.ESFUERZO_OPENROUTER`) mientras dura la
+    evaluación y lo restaura al salir."""
+    previo = getattr(mr, atributo)
+    setattr(mr, atributo, valor)
     try:
         yield
     finally:
-        mr.ESFUERZO = previo
+        setattr(mr, atributo, previo)
 
 
 @contextlib.contextmanager
@@ -342,7 +354,7 @@ def clasificar(hallazgo, diff, destino):
     return "archivo"
 
 
-def revisar(caso, modelo, clave):
+def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
     """Una revisión del caso, igual que main(): devuelve un registro sin texto libre
     del modelo salvo los hallazgos y pendientes ya validados."""
     # Tachado antes de enviar, validar y clasificar, como en main(): una cita
@@ -360,7 +372,8 @@ def revisar(caso, modelo, clave):
     try:
         for _ in range(mr.INTENTOS_RESPUESTA):
             registro["solicitudes"] += 1
-            texto = mr.llamar_mistral(mensajes, modelo, clave)
+            texto = mr.llamar_mistral(mensajes, modelo, clave,
+                                      proveedor=proveedor, ruta=ruta)
             diagnostico = []
             resultado = mr.interpretar(texto, diff[:mr.MAX_DIFF],
                 exigir_comprobaciones=True, rutas_comprobaciones=rutas,
@@ -381,8 +394,14 @@ def revisar(caso, modelo, clave):
     except (urllib.error.URLError, TimeoutError):
         registro.update(estado="error", detalle="conexión")
         return registro
-    except ValueError as fallo:
-        registro.update(estado="cortada", detalle=getattr(fallo, "causa", "") or "incompleta")
+    except mr.RespuestaIncompleta as fallo:
+        # Solo `length` es una salida cortada; `error_proveedor` o `error`
+        # son fallos del proveedor y no se arreglan subiendo `--max-salida`.
+        registro.update(estado="cortada" if fallo.causa == "length" else "error",
+                        detalle=fallo.causa or "incompleta")
+        return registro
+    except ValueError:
+        registro.update(estado="cortada", detalle="incompleta")
         return registro
     if resultado is None:
         return registro
@@ -404,10 +423,17 @@ def revisar(caso, modelo, clave):
     return registro
 
 
-def resumir(casos, resultados, modelo, repeticiones):
+def resumir(casos, resultados, modelo, repeticiones, proveedor="mistral", ruta=""):
     """Informe en Markdown. Las cifras son recuentos; el juicio final es humano."""
-    partes = ["## Evaluación del revisor de Mistral (`%s`, %d repetición(es) por caso)"
-              % (modelo, repeticiones), ""]
+    if proveedor == "openrouter":
+        # Proveedor y modelo a la vista: dos evaluaciones solo se comparan
+        # si se sabe qué configuración midió cada una.
+        etiqueta = "vía OpenRouter (`%s`%s" % (
+            modelo, ", proveedor `%s`" % ruta if ruta else ", proveedor elegido por OpenRouter")
+    else:
+        etiqueta = "de Mistral (`%s`" % modelo
+    partes = ["## Evaluación del revisor %s, %d repetición(es) por caso)"
+              % (etiqueta, repeticiones), ""]
     ejecuciones = [r for c in casos for r in resultados[c["id"]]]
     validas = [r for r in ejecuciones if r["estado"] == "valida"]
     partes.append("- **Revisiones válidas:** %d de %d (%s)." % (
@@ -493,7 +519,7 @@ def main(argv=None):
     ap.add_argument("--solo", default="", help="ids separados por comas")
     ap.add_argument("--repeticiones", type=int, default=2)
     ap.add_argument("--salida", help="ruta del JSON con cada revisión")
-    ap.add_argument("--ejecutar", action="store_true", help="llamar a la API de Mistral")
+    ap.add_argument("--ejecutar", action="store_true", help="llamar a la API del proveedor (Mistral u OpenRouter)")
     ap.add_argument("--modelo", default="",
                     help="modelo solo para esta evaluación (vacío = MISTRAL_MODEL)")
     ap.add_argument("--esfuerzo", default="",
@@ -520,17 +546,26 @@ def main(argv=None):
         print("::error::Hasta %d peticiones por ejecución: reduce casos o repeticiones."
               % MAX_LLAMADAS)
         return 2
-    clave = os.environ.get("MISTRAL_API_KEY", "")
-    if not clave:
-        print("::error::Falta MISTRAL_API_KEY: la evaluación no se ha ejecutado.")
+    try:
+        # Mismo proveedor que el revisor (MISTRAL_PROVEEDOR); el modelo de
+        # `--modelo` manda sobre MISTRAL_MODEL.
+        proveedor, modelo, ruta = mr.configuracion(args.modelo.strip())
+    except mr.ConfiguracionInvalida as fallo:
+        print("::error::Configuración no válida: %s." % fallo)
         return 2
-    modelo = args.modelo.strip() or os.environ.get("MISTRAL_MODEL") or mr.MODELO
-    # El id viaja en el cuerpo JSON y en el informe: solo su alfabeto.
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,79}", modelo):
+    secreto = mr.PROVEEDORES[proveedor]["secreto"]
+    clave = os.environ.get(secreto, "")
+    if not clave:
+        print("::error::Falta %s: la evaluación no se ha ejecutado." % secreto)
+        return 2
+    # El id viaja en el cuerpo JSON y en el informe: solo su alfabeto. El de
+    # OpenRouter ya lo valida `configuracion` (lleva `/`).
+    if proveedor == "mistral" and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,79}", modelo):
         print("::error::Modelo no válido: solo letras, números, punto, guion y dos puntos.")
         return 2
-    esfuerzo = args.esfuerzo.strip() or mr.ESFUERZO
-    if esfuerzo not in ESFUERZOS:
+    # Con OpenRouter, sin `--esfuerzo` no se envía (ver mr.ESFUERZO_OPENROUTER).
+    esfuerzo = args.esfuerzo.strip() or (mr.ESFUERZO if proveedor == "mistral" else "")
+    if esfuerzo and esfuerzo not in ESFUERZOS:
         print("::error::Esfuerzo no válido: usa %s." % ", ".join(ESFUERZOS))
         return 2
     texto_salida = args.max_salida.strip()
@@ -548,24 +583,29 @@ def main(argv=None):
     agotado = cancelada = False
 
     def datos(en_curso):
-        return {"modelo": modelo, "repeticiones": args.repeticiones,
+        return {"proveedor": proveedor, "ruta": ruta,
+                "modelo": modelo, "repeticiones": args.repeticiones,
                 "esfuerzo": esfuerzo, "max_salida": max_salida, "en_curso": en_curso,
                 "peticiones": presupuesto.usadas, "incompleta": agotado or cancelada,
                 "cancelada": cancelada,
                 "tokens": {"entrada": presupuesto.entrada,
                            "salida": presupuesto.salida,
                            "respuestas": presupuesto.respondidas,
-                           "sin_esfuerzo": presupuesto.sin_esfuerzo},
+                           "sin_esfuerzo": presupuesto.sin_esfuerzo,
+                           "coste": presupuesto.coste if presupuesto.con_coste else None,
+                           "con_coste": presupuesto.con_coste},
                 "casos": casos, "resultados": resultados}
 
     # Solo cambia en este proceso: el revisor de los PR sigue con el suyo.
-    with con_esfuerzo(esfuerzo), con_max_salida(max_salida), \
-            Presupuesto(MAX_LLAMADAS, espera_para(max_salida)) as presupuesto:
+    with con_esfuerzo(esfuerzo or mr.ESFUERZO), \
+            con_esfuerzo(esfuerzo if proveedor == "openrouter" else "", "ESFUERZO_OPENROUTER"), \
+            con_max_salida(max_salida), \
+            Presupuesto(MAX_LLAMADAS, espera_para(max_salida), bool(esfuerzo)) as presupuesto:
         try:
             for c in casos:
                 for n in range(args.repeticiones):
                     antes = presupuesto.usadas
-                    registro = revisar(c, modelo, clave)
+                    registro = revisar(c, modelo, clave, proveedor=proveedor, ruta=ruta)
                     registro["solicitudes"] = presupuesto.usadas - antes
                     resultados[c["id"]].append(registro)
                     # flush: en el log de Actions se ve el avance caso a caso.
@@ -580,14 +620,20 @@ def main(argv=None):
         except KeyboardInterrupt:
             # GitHub cancela con SIGINT: se cierra con lo ya revisado.
             cancelada = True
-    informe = resumir(casos, resultados, modelo, args.repeticiones)
+    informe = resumir(casos, resultados, modelo, args.repeticiones, proveedor, ruta)
     informe += "\nPeticiones HTTP a la API: %d de %d permitidas.\n" % (
         presupuesto.usadas, MAX_LLAMADAS)
     informe += ("\nTokens según la API: %d de entrada y %d de salida, en %d respuesta(s) "
                 "con recuento. Esfuerzo de razonamiento pedido: `%s`. Tope de salida: "
                 "%d tokens por respuesta, con %d s de espera.\n" % (
                     presupuesto.entrada, presupuesto.salida, presupuesto.respondidas,
-                    esfuerzo, max_salida, presupuesto.espera))
+                    esfuerzo or "ninguno, el del modelo", max_salida, presupuesto.espera))
+    if presupuesto.con_coste:
+        informe += ("\nCoste según la API: %.6f créditos en %d de %d respuesta(s) con "
+                    "recuento.\n" % (presupuesto.coste, presupuesto.con_coste,
+                                     presupuesto.respondidas))
+    else:
+        informe += "\nCoste: la API no lo informa; no se estima.\n"
     rechazadas = sum(len(r.get("rechazadas", ())) for rs in resultados.values() for r in rs)
     if rechazadas:
         informe += ("\n%d respuesta(s) rechazadas por el formato: su texto está en el "

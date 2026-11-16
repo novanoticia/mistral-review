@@ -34,5 +34,10 @@ jobs:
     with:
       model: ${{ vars.MISTRAL_MODEL }}
       reply_model: ${{ vars.MISTRAL_REPLY_MODEL }}
+      # Proveedor: vacío = Mistral. Para OpenRouter, variable MISTRAL_PROVIDER
+      # = openrouter, MISTRAL_MODEL = organización/modelo y secreto OPENROUTER_API_KEY.
+      provider: ${{ vars.MISTRAL_PROVIDER }}
+      openrouter_provider: ${{ vars.OPENROUTER_PROVIDER }}
     secrets:
       MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
