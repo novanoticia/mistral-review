@@ -631,6 +631,11 @@ class TestWorkflowEval(unittest.TestCase):
         ordenes = [p["run"] for p in trabajo["steps"] if "run" in p]
         self.assertTrue(all("python3 .mistral-review/scripts/mistral_eval.py" in o for o in ordenes))
         self.assertEqual(sum("--ejecutar" in o for o in ordenes), 1)
+        # Mismas exclusiones que la revisión del repo: los objetivos y el diff
+        # de cada caso no deben incluir generados (paso de email-triage-plugin).
+        pasos = [p for p in trabajo["steps"] if "run" in p]
+        self.assertTrue(all(p["env"]["MISTRAL_EXCLUIDOS"] == "${{ inputs.excluded }}"
+                            for p in pasos))
 
     def test_el_ejemplo_solo_es_manual_y_pasa_entradas_que_existen(self):
         ejemplo = self.cargar("ejemplos/mistral-eval.yml")
