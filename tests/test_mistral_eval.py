@@ -152,6 +152,22 @@ class TestRangosObjetivo(unittest.TestCase):
 
 
 class TestClasificar(unittest.TestCase):
+    def test_una_cita_de_varias_lineas_se_situa_como_tramo_entero(self):
+        # Revisión Codex (mistral-review#3): `return None` se repite en la
+        # función objetivo; el tramo citado solo existe en `ajena`.
+        diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,0 +1,6 @@\n"
+                "+def objetivo():\n+    return None\n+\n"
+                "+def ajena():\n+    return None\n+    pass\n")
+        cita = "def ajena():\n    return None"
+        self.assertEqual(ev.lineas_citadas(diff, "a.py", cita), {4, 5})
+        hallazgo = dict(HALLAZGO, fragmento=cita)
+        self.assertEqual(ev.clasificar(hallazgo, diff, {"a.py": [(1, 2, "objetivo")]}),
+                         "archivo")
+        self.assertEqual(ev.clasificar(hallazgo, diff, {"a.py": [(4, 6, "ajena")]}),
+                         "funcion")
+        # Una sola línea repetida sigue contando en todas sus apariciones.
+        self.assertEqual(ev.lineas_citadas(diff, "a.py", "return None"), {2, 5})
+
     def test_lineas_citadas_son_las_de_la_cabeza(self):
         self.assertEqual(ev.lineas_citadas(DIFF, "a.py", "y = x + 1"), {2})
         self.assertEqual(ev.lineas_citadas(DIFF, "a.py", "+    y = x + 1\nreturn x"), {2, 3})

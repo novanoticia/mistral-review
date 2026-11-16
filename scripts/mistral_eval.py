@@ -297,20 +297,37 @@ def lineas_citadas(diff, archivo, fragmento):
     como en `mr.lineas_cambiadas`. Quitar una guarda es un defecto que solo se
     puede citar por la línea borrada, y `mr.cita_en` acepta esa evidencia
     (Codex, email-triage-plugin#203).
+
+    Una cita de varias líneas se localiza como tramo seguido de un mismo hunk,
+    la misma regla que la acepta (`mr.cita_consecutiva`): emparejar cada línea
+    por separado la situaba también donde solo se repite una de ellas, p. ej.
+    un `return None` de la función objetivo (revisión Codex, mistral-review#3).
     """
-    citadas = set()
-    for linea in str(fragmento).splitlines():
-        limpio = linea.strip()
-        if any(c.isalnum() for c in limpio):
-            citadas.add(limpio)
-            if limpio[:1] in "+-":
-                citadas.add(limpio[1:].strip())
-    numeros = set()
+    trozos = [t for t in str(fragmento).splitlines()
+              if t.strip() and t.strip() not in ("+", "-")]
+    if not any(any(c.isalnum() for c in t) for t in trozos):
+        return set()
+
+    def numeros_de(linea, numero):
+        return {numero, numero - 1} - {0} if linea.startswith("-") else {numero}
+
+    # Hunks del archivo, sin líneas en blanco (tampoco cuentan en la cita).
+    hunks, esperado = [], None
     for ruta, linea, numero in mr._lineas_de_hunks(diff):
-        if ruta == archivo and linea[1:].strip() in citadas:
-            numeros.add(numero)
-            if linea.startswith("-") and numero > 1:
-                numeros.add(numero - 1)
+        if ruta != archivo:
+            continue
+        if not hunks or numero != esperado:
+            hunks.append([])
+        esperado = numero if linea.startswith("-") else numero + 1
+        if linea[1:].strip():
+            hunks[-1].append((linea, numero))
+    numeros = set()
+    for hunk in hunks:
+        for inicio in range(len(hunk) - len(trozos) + 1):
+            tramo = hunk[inicio:inicio + len(trozos)]
+            if all(mr._misma_linea(t, l) for t, (l, _) in zip(trozos, tramo)):
+                for linea, numero in tramo:
+                    numeros |= numeros_de(linea, numero)
     return numeros
 
 
