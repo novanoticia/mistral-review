@@ -25,9 +25,11 @@ def entorno(**extra):
 
 
 def respuesta_http(cuerpo):
+    datos = cuerpo if isinstance(cuerpo, bytes) else json.dumps(cuerpo).encode()
     resp = mock.MagicMock()
-    resp.__enter__.return_value.read.return_value = (
-        cuerpo if isinstance(cuerpo, bytes) else json.dumps(cuerpo).encode())
+    # Con `with` (el revisor) y sin él (el presupuesto de la evaluación lo envuelve).
+    resp.__enter__.return_value.read.return_value = datos
+    resp.read.return_value = datos
     return resp
 
 
@@ -276,6 +278,171 @@ class TestMainConProveedor(unittest.TestCase):
             variables, fallo=mr.RespuestaIncompleta("error_proveedor"))
         self.assertIn("OpenRouter devolvió una respuesta incompleta", cuerpo)
         self.assertIn("`error_proveedor`", cuerpo)
+
+
+class TestContrasteConProveedor(unittest.TestCase):
+    """El contraste (mistral_reply.py) usa el proveedor de la revisión."""
+
+    def ejecutar(self, variables, respuesta=None):
+        from tests.test_mistral_reply import reply, SHA, FUENTE, EVIDENCIAS, RESPUESTA
+        pr = {"state": "open", "head": {"sha": SHA, "repo": {"full_name": "o/r"}}}
+        base = dict(SIN_PROVEEDOR, MISTRAL_API_KEY="", OPENROUTER_API_KEY="",
+                    MISTRAL_REPLY_MODEL="", GITHUB_EVENT_PATH="evento.json",
+                    GITHUB_REPOSITORY="o/r", GITHUB_EVENT_NAME="pull_request_review",
+                    GITHUB_RUN_ID="88")
+        base.update(variables)
+        with mock.patch.dict(os.environ, base), \
+                mock.patch("builtins.open", mock.mock_open(read_data="{}")), \
+                mock.patch.object(reply, "seleccionar", return_value=(7, [FUENTE])), \
+                mock.patch.object(reply, "api", side_effect=[pr, [], pr, []]), \
+                mock.patch.object(reply.subprocess, "run"), \
+                mock.patch.object(reply, "construir_mensajes", return_value=([], EVIDENCIAS)), \
+                mock.patch.object(reply.mr, "llamar_mistral", return_value=respuesta or
+                                  json.dumps({"respuestas": [RESPUESTA]})) as llamar, \
+                mock.patch.object(reply.mr, "publicar") as publicar, \
+                mock.patch.object(reply.mr, "escribir_resumen") as resumen, \
+                mock.patch("builtins.print") as imprimir:
+            codigo = reply.main()
+        textos = [str(c.args[0]) for c in resumen.call_args_list]
+        textos += [" ".join(map(str, c.args)) for c in imprimir.call_args_list]
+        return codigo, llamar, publicar, "\n".join(textos)
+
+    def test_usa_openrouter_con_el_modelo_del_contraste(self):
+        codigo, llamar, publicar, _ = self.ejecutar({
+            "MISTRAL_PROVEEDOR": "openrouter", "MISTRAL_MODEL": "z-ai/glm-5.3-flash",
+            "MISTRAL_REPLY_MODEL": "deepseek/deepseek-v4.1-flash",
+            "MISTRAL_OPENROUTER_PROVEEDOR": "deepinfra", "OPENROUTER_API_KEY": CLAVE_OR})
+        self.assertEqual(codigo, 0)
+        self.assertEqual(llamar.call_args.args[1:], ("deepseek/deepseek-v4.1-flash", CLAVE_OR))
+        self.assertEqual(llamar.call_args.kwargs, {"proveedor": "openrouter",
+                                                   "ruta": "deepinfra"})
+        cuerpo = publicar.call_args.args[2]
+        self.assertIn("## Contraste vía OpenRouter (`deepseek/deepseek-v4.1-flash`, "
+                      "proveedor `deepinfra`)", cuerpo)
+        self.assertNotIn(CLAVE_OR, cuerpo)
+
+    def test_mistral_por_defecto_no_cambia(self):
+        codigo, llamar, publicar, _ = self.ejecutar({"MISTRAL_API_KEY": CLAVE_MI})
+        self.assertEqual(codigo, 0)
+        self.assertEqual(llamar.call_args.args[1:], (mr.MODELO, CLAVE_MI))
+        self.assertIn("Contraste de [Mistral AI (@mistralai)]", publicar.call_args.args[2])
+
+    def test_falta_la_clave_del_proveedor_elegido(self):
+        codigo, llamar, publicar, texto = self.ejecutar({
+            "MISTRAL_PROVEEDOR": "openrouter", "MISTRAL_MODEL": "z-ai/glm-5.3-flash",
+            "MISTRAL_API_KEY": CLAVE_MI})
+        self.assertEqual(codigo, 0)
+        llamar.assert_not_called()
+        publicar.assert_not_called()
+        self.assertIn("OPENROUTER_API_KEY no disponible", texto)
+
+    def test_configuracion_invalida_falla_sin_llamar(self):
+        codigo, llamar, publicar, texto = self.ejecutar({
+            "MISTRAL_PROVEEDOR": "openrouter", "OPENROUTER_API_KEY": CLAVE_OR})
+        self.assertEqual(codigo, 1)
+        llamar.assert_not_called()
+        publicar.assert_not_called()
+        self.assertIn("Contraste no ejecutado por configuración", texto)
+
+
+class TestEvaluacionConProveedor(unittest.TestCase):
+    """La evaluación (mistral_eval.py) mide la configuración elegida y la registra."""
+
+    def setUp(self):
+        from tests.test_mistral_eval import ev, POSITIVO
+        self.ev, self.positivo = ev, POSITIVO
+
+    def main(self, argv, variables):
+        import tempfile
+        from contextlib import redirect_stdout
+        ev = self.ev
+        base = dict(SIN_PROVEEDOR, MISTRAL_API_KEY="", OPENROUTER_API_KEY="")
+        base.update(variables)
+        registro = {"estado": "valida", "detalle": "", "solicitudes": 1,
+                    "recortado": False, "hallazgos": [], "pendientes": []}
+        salida = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            ruta = os.path.join(d, "r.json")
+            with mock.patch.dict(os.environ, base), \
+                    mock.patch.object(ev, "cargar_casos", return_value=[self.positivo]), \
+                    mock.patch.object(ev, "revisar", return_value=registro) as revisar, \
+                    mock.patch.object(ev.mr, "escribir_resumen"), redirect_stdout(salida):
+                codigo = ev.main(["--ejecutar", "--repeticiones", "1", "--salida", ruta]
+                                 + argv)
+            guardado = None
+            if os.path.exists(ruta):
+                with open(ruta, encoding="utf-8") as fh:
+                    guardado = json.load(fh)
+        return codigo, revisar, salida.getvalue(), guardado
+
+    def test_evalua_con_openrouter_y_lo_registra(self):
+        codigo, revisar, salida, guardado = self.main(
+            ["--modelo", "deepseek/deepseek-v4.1-flash"],
+            {"MISTRAL_PROVEEDOR": "openrouter", "MISTRAL_OPENROUTER_PROVEEDOR": "deepinfra",
+             "OPENROUTER_API_KEY": CLAVE_OR})
+        self.assertEqual(codigo, 0)
+        self.assertEqual(revisar.call_args.args[1:], ("deepseek/deepseek-v4.1-flash", CLAVE_OR))
+        self.assertEqual(revisar.call_args.kwargs, {"proveedor": "openrouter",
+                                                    "ruta": "deepinfra"})
+        self.assertEqual((guardado["proveedor"], guardado["ruta"], guardado["modelo"]),
+                         ("openrouter", "deepinfra", "deepseek/deepseek-v4.1-flash"))
+        self.assertIn("Evaluación del revisor vía OpenRouter "
+                      "(`deepseek/deepseek-v4.1-flash`, proveedor `deepinfra`", salida)
+        self.assertNotIn(CLAVE_OR, salida + json.dumps(guardado))
+
+    def test_mistral_por_defecto_lo_registra(self):
+        codigo, revisar, salida, guardado = self.main([], {"MISTRAL_API_KEY": CLAVE_MI})
+        self.assertEqual(codigo, 0)
+        self.assertEqual((guardado["proveedor"], guardado["modelo"]), ("mistral", mr.MODELO))
+        self.assertIn("Evaluación del revisor de Mistral (`%s`" % mr.MODELO, salida)
+        # Mistral no declara el coste: se dice, sin estimarlo.
+        self.assertIn("Coste: la API no lo informa", salida)
+        self.assertIsNone(guardado["tokens"]["coste"])
+
+    def test_sin_clave_o_sin_modelo_no_evalua(self):
+        for argv, variables, texto in (
+                ([], {"MISTRAL_PROVEEDOR": "openrouter", "MISTRAL_MODEL": "z-ai/glm-5.3-flash",
+                      "MISTRAL_API_KEY": CLAVE_MI}, "Falta OPENROUTER_API_KEY"),
+                ([], {"MISTRAL_PROVEEDOR": "openrouter", "OPENROUTER_API_KEY": CLAVE_OR},
+                 "obligatorio"),
+                (["--modelo", mr.MODELO], {"MISTRAL_PROVEEDOR": "openrouter",
+                                           "OPENROUTER_API_KEY": CLAVE_OR},
+                 "organización/modelo")):
+            with self.subTest(texto=texto):
+                codigo, revisar, salida, _ = self.main(argv, variables)
+                self.assertEqual(codigo, 2)
+                revisar.assert_not_called()
+                self.assertIn(texto, salida)
+
+    def test_revisar_pasa_el_proveedor_a_la_llamada(self):
+        from tests.test_mistral_eval import DIFF, COMPROBACIONES
+        ev = self.ev
+        texto = json.dumps({"resumen": "R", "hallazgos": [],
+                            "comprobaciones": COMPROBACIONES})
+        with mock.patch.object(ev.mr, "obtener_diff", return_value=DIFF), \
+                mock.patch.object(ev.mr, "obtener_rutas_diff", return_value={"a.py"}), \
+                mock.patch.object(ev.mr, "obtener_contexto", return_value=""), \
+                mock.patch.object(ev.mr, "leer_guia", return_value=(None, "")), \
+                mock.patch.object(ev, "git", return_value="asunto\n"), \
+                mock.patch.object(ev, "objetivos", return_value={"a.py": [(1, 2, "f")]}), \
+                mock.patch.object(ev.mr, "llamar_mistral", return_value=texto) as api:
+            registro = ev.revisar(self.positivo, "z-ai/glm-5.3-flash", "k",
+                                  proveedor="openrouter", ruta="z-ai")
+        self.assertEqual(registro["estado"], "valida")
+        self.assertEqual(api.call_args.kwargs, {"proveedor": "openrouter", "ruta": "z-ai"})
+
+    def test_suma_el_coste_que_declara_la_api(self):
+        ev = self.ev
+        con = eleccion()
+        sin = dict(eleccion(), usage={"prompt_tokens": 1, "completion_tokens": 1})
+        with mock.patch.object(ev.mr.urllib.request, "urlopen", side_effect=[
+                respuesta_http(con), respuesta_http(con), respuesta_http(sin)]):
+            with ev.Presupuesto(5) as presupuesto:
+                for _ in range(3):
+                    ev.mr.llamar_mistral([], "z-ai/x", "k", proveedor="openrouter")
+        self.assertEqual(presupuesto.con_coste, 2)
+        self.assertAlmostEqual(presupuesto.coste, 0.0002)
+        self.assertEqual(presupuesto.respondidas, 3)
 
 
 if __name__ == "__main__":
