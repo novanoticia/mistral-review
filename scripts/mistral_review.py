@@ -22,6 +22,9 @@ con el contexto de funciones de shell y `mask_secrets` de repo-auditor-ia.
 - **Un informe por commit**; «Re-run» sí repite.
 - **Reintentos acotados.** Una respuesta mal formada o cortada por `length`
   se pide una vez más (tope de dos solicitudes).
+- **Dos proveedores.** Mistral por defecto (MISTRAL_API_KEY) u OpenRouter
+  (MISTRAL_PROVEEDOR=openrouter, OPENROUTER_API_KEY y modelo obligatorio).
+  Misma revisión y misma validación; solo cambian el endpoint y el cuerpo.
 """
 import ast
 from datetime import datetime, timezone
@@ -40,9 +43,61 @@ MARCA = "<!-- mistral-review -->"
 # Solo en informes válidos: identifica base y cabeza para no repetirlos.
 MARCA_OK = "<!-- mistral-review-ok:%s:%s -->"
 API = "https://api.mistral.ai/v1/chat/completions"
+# OpenRouter: pasarela compatible con OpenAI (docs: openrouter.ai/docs/api_reference/overview).
+API_OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
+# Dos proveedores con endpoint fijo; sin URL configurable. Cada uno lee solo
+# su secreto: con Mistral no se exige la clave de OpenRouter, ni al revés.
+PROVEEDORES = {
+    "mistral": {"api": API, "secreto": "MISTRAL_API_KEY", "nombre": "Mistral"},
+    "openrouter": {"api": API_OPENROUTER, "secreto": "OPENROUTER_API_KEY",
+                   "nombre": "OpenRouter"},
+}
 # Decisión del mantenedor (2026-11-15). Identificador fijo: vigilar su
-# retirada en https://docs.mistral.ai/models.
+# retirada en https://docs.mistral.ai/models. Solo para Mistral: con
+# OpenRouter el modelo es obligatorio (decisión del mantenedor, 2026-11-16).
 MODELO = "zai-glm-5-3-flash"
+# `organización/modelo`, con variante opcional (`:batch`). Un id de Mistral
+# (`zai-glm-5-3-flash`) no encaja: evita enviarlo a OpenRouter por descuido.
+_MODELO_OPENROUTER = re.compile(r"[a-z0-9][a-z0-9._-]{0,49}/[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
+# Proveedor final de OpenRouter (`z-ai`, `google-vertex/us-east5`).
+_RUTA_OPENROUTER = re.compile(r"[a-z0-9][a-z0-9._-]{0,49}(?:/[a-z0-9._-]{1,30}){0,3}")
+
+
+class ConfiguracionInvalida(Exception):
+    """Proveedor, modelo o ruta no válidos. No es ValueError: no debe
+    confundirse con una respuesta inválida del modelo. El mensaje nunca
+    repite valores recibidos."""
+
+
+def configuracion(modelo=""):
+    """(proveedor, modelo, ruta) según MISTRAL_PROVEEDOR, el modelo pedido
+    (o MISTRAL_MODEL) y MISTRAL_OPENROUTER_PROVEEDOR.
+
+    Sin proveedor, Mistral con su modelo por defecto: la configuración de
+    antes no cambia. Con OpenRouter no hay modelo por defecto ni cambio
+    silencioso a otro: si falta o no tiene forma `organización/modelo`, falla.
+    """
+    proveedor = (os.environ.get("MISTRAL_PROVEEDOR") or "mistral").strip().lower()
+    if proveedor not in PROVEEDORES:
+        raise ConfiguracionInvalida("proveedor no reconocido: usa `mistral` u `openrouter`")
+    modelo = (modelo or os.environ.get("MISTRAL_MODEL") or "").strip()
+    ruta = os.environ.get("MISTRAL_OPENROUTER_PROVEEDOR", "").strip()
+    if proveedor == "mistral":
+        if ruta:
+            # Volver a Mistral sin borrar la variable no debe romper la revisión.
+            print("::warning::openrouter_provider solo se usa con OpenRouter; se ignora.")
+        return proveedor, modelo or MODELO, ""
+    if not modelo:
+        raise ConfiguracionInvalida(
+            "con OpenRouter el modelo es obligatorio (forma `organización/modelo`)")
+    if not _MODELO_OPENROUTER.fullmatch(modelo):
+        raise ConfiguracionInvalida(
+            "el modelo de OpenRouter debe tener la forma `organización/modelo`; "
+            "un identificador de la API de Mistral no sirve")
+    if ruta and not _RUTA_OPENROUTER.fullmatch(ruta):
+        raise ConfiguracionInvalida(
+            "openrouter_provider debe ser un identificador de proveedor de OpenRouter")
+    return proveedor, modelo, ruta
 MAX_DIFF = 150_000   # caracteres; codestral admite mucho más, el coste no
 MAX_GUIA = 60_000    # guías largas enteras (CLAUDE.md de email-triage: 37.000)
 MAX_CONTEXTO = 40_000
@@ -509,7 +564,7 @@ class RespuestaIncompleta(ValueError):
     MAX_SALIDA) reducido a letras: nunca lleva contenido de la respuesta."""
 
     def __init__(self, causa, medidas=""):
-        ValueError.__init__(self, "Mistral no completó la revisión")
+        ValueError.__init__(self, "El modelo no completó la revisión")
         self.causa = re.sub(r"[^a-z_]", "", str(causa or "").lower())[:20]
         self.medidas = medidas
 
@@ -581,20 +636,50 @@ def medir_corte(respuesta):
     return " ".join(medidas)
 
 
-def llamar_mistral(mensajes, modelo, clave, json_mode=True):
+def cuerpo_peticion(mensajes, modelo, proveedor="mistral", ruta="", json_mode=True):
+    """Cuerpo JSON de la petición. El de Mistral no cambia; OpenRouter añade
+    preferencias de enrutado (openrouter.ai/docs/guides/routing/provider-selection):
+
+    - `require_parameters`: OpenRouter ignora en silencio un parámetro que el
+      proveedor no admite; sin esto el modo JSON podía desaparecer sin aviso.
+    - `allow_fallbacks: false`: sin saltar a otro proveedor si falla el
+      elegido (decisión del mantenedor: reproducibilidad antes que disponibilidad).
+    - `data_collection: "deny"`: solo proveedores que no guardan los datos.
+    - `order`: el proveedor final fijado con `openrouter_provider`.
+    """
     cuerpo = {"model": modelo, "messages": mensajes, "temperature": 0.1,
               "max_tokens": MAX_SALIDA, "reasoning_effort": ESFUERZO}
     if json_mode:
         cuerpo["response_format"] = {"type": "json_object"}
+    if proveedor == "openrouter":
+        preferencias = {"require_parameters": True, "allow_fallbacks": False,
+                        "data_collection": "deny"}
+        if ruta:
+            preferencias["order"] = [ruta]
+        cuerpo["provider"] = preferencias
+    return cuerpo
+
+
+def llamar_mistral(mensajes, modelo, clave, json_mode=True, proveedor="mistral", ruta=""):
+    """Una revisión del modelo con el proveedor elegido (Mistral por defecto).
+    Conserva el nombre: la evaluación y el contraste la llaman así."""
+    cuerpo = cuerpo_peticion(mensajes, modelo, proveedor, ruta, json_mode)
     for intento in range(3):
         req = urllib.request.Request(
-            API, data=json.dumps(cuerpo).encode("utf-8"), method="POST",
+            PROVEEDORES[proveedor]["api"], data=json.dumps(cuerpo).encode("utf-8"),
+            method="POST",
             headers={"Content-Type": "application/json",
                      "Authorization": "Bearer %s" % clave})
         espera = 2 ** intento
         try:
             with urllib.request.urlopen(req, timeout=180) as resp:
                 respuesta = json.loads(resp.read())
+            # OpenRouter puede responder 200 con solo `error` y sin `choices`
+            # (fallo del proveedor tras enviar las cabeceras). Su mensaje no
+            # se muestra: puede llevar datos del prompt.
+            if isinstance(respuesta, dict) and "error" in respuesta \
+                    and not respuesta.get("choices"):
+                raise RespuestaIncompleta("error_proveedor")
             try:
                 eleccion = respuesta["choices"][0]
                 if eleccion["finish_reason"] != "stop":
@@ -602,9 +687,9 @@ def llamar_mistral(mensajes, modelo, clave, json_mode=True):
                                               medir_corte(respuesta))
                 contenido = texto_de(eleccion["message"]["content"])
             except (KeyError, IndexError, TypeError) as error:
-                raise ValueError("Respuesta de API de Mistral inválida") from error
+                raise ValueError("Respuesta de la API inválida") from error
             if not isinstance(contenido, str) or not contenido.strip():
-                raise ValueError("Mistral devolvió contenido vacío o no textual")
+                raise ValueError("El modelo devolvió contenido vacío o no textual")
             return contenido
         except urllib.error.HTTPError as error:
             if error.code == 400 and intento < 2:
@@ -802,9 +887,16 @@ def _render_hallazgo(partes, i, h, inerte=False):
 
 def renderizar(resultado, modelo, diff_len, recortado, cabeza="", error=None,
                comprobaciones=None, ejecucion_url="", intento="",
-               sin_verificar=None, base="", diagnostico=None):
-    partes = [MARCA, "## Revisión de [Mistral AI (@mistralai)]"
-              "(https://github.com/mistralai) (`%s`)" % modelo]
+               sin_verificar=None, base="", diagnostico=None,
+               proveedor="mistral", ruta=""):
+    if proveedor == "openrouter":
+        # OpenRouter es la pasarela; quien responde es el modelo elegido.
+        cabecera = "## Revisión vía OpenRouter (`%s`%s)" % (
+            modelo, ", proveedor `%s`" % ruta if ruta else "")
+    else:
+        cabecera = ("## Revisión de [Mistral AI (@mistralai)]"
+                    "(https://github.com/mistralai) (`%s`)" % modelo)
+    partes = [MARCA, cabecera]
     if cabeza:
         partes.append("Commit revisado: `%s`." % cabeza)
     if ejecucion_url:
@@ -922,18 +1014,27 @@ def ya_revisado(repo, numero, base, cabeza):
 
 
 def main():
-    clave = os.environ.get("MISTRAL_API_KEY", "")
+    try:
+        proveedor, modelo, ruta = configuracion()
+    except ConfiguracionInvalida as fallo:
+        # Error de quien configura, no del PR: sin llamar a ninguna API.
+        aviso = "**Revisión no ejecutada por configuración:** %s." % fallo
+        escribir_resumen(aviso)
+        print("::error::" + aviso)
+        return 1
+    nombre = PROVEEDORES[proveedor]["nombre"]
+    secreto = PROVEEDORES[proveedor]["secreto"]
+    clave = os.environ.get(secreto, "")
     if not clave:
         # PR desde un fork: GitHub no le pasa secretos. No es un fallo.
-        aviso = ("**Revisión de Mistral omitida:** no hay MISTRAL_API_KEY "
-                 "disponible. En forks GitHub no entrega secretos; en el "
-                 "repositorio comprueba Settings → Secrets and variables → Actions.")
+        aviso = ("**Revisión de %s omitida:** no hay %s disponible. En forks "
+                 "GitHub no entrega secretos; en el repositorio comprueba "
+                 "Settings → Secrets and variables → Actions." % (nombre, secreto))
         escribir_resumen(aviso)
         print(aviso)
         return 0
     with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as fh:
         pr = json.load(fh)["pull_request"]
-    modelo = os.environ.get("MISTRAL_MODEL") or MODELO
     # Abrir como borrador y marcar listo, o editar el título, lanzaban dos
     # informes distintos del mismo commit. «Re-run» (intento > 1) sí repite.
     # Sin GH_TOKEN no se puede leer el historial: se revisa sin consultarlo.
@@ -941,9 +1042,9 @@ def main():
             "GITHUB_RUN_ATTEMPT", "1") == "1" and ya_revisado(
             os.environ["GITHUB_REPOSITORY"], pr["number"],
             pr["base"]["sha"], pr["head"]["sha"]):
-        aviso = ("**Revisión de Mistral no repetida:** el commit `%s` ya tiene un "
+        aviso = ("**Revisión de %s no repetida:** el commit `%s` ya tiene un "
                  "informe válido en este PR. Para pedir otro, usa «Re-run jobs»."
-                 % pr["head"]["sha"])
+                 % (nombre, pr["head"]["sha"]))
         escribir_resumen(aviso)
         print(aviso)
         return 0
@@ -954,14 +1055,15 @@ def main():
         diff = mask_secrets(obtener_diff(pr["base"]["sha"], pr["head"]["sha"]))
         if not diff.strip():
             resultado = ("No hay diff revisable tras excluir archivos generados; "
-                         "no se ha consultado a Mistral.", [])
+                         "no se ha consultado a %s." % nombre, [])
         else:
             mensajes, recortado = construir_mensajes(pr.get("title"), pr.get("body"),
                 diff, leer_guia(), obtener_contexto(diff[:MAX_DIFF], pr["head"]["sha"]))
             rutas = obtener_rutas_diff(pr["base"]["sha"], pr["head"]["sha"])
             for solicitud in range(1, INTENTOS_RESPUESTA + 1):
                 try:
-                    texto = llamar_mistral(mensajes, modelo, clave)
+                    texto = llamar_mistral(mensajes, modelo, clave,
+                                           proveedor=proveedor, ruta=ruta)
                 except RespuestaIncompleta as corte:
                     if corte.causa != "length" or solicitud == INTENTOS_RESPUESTA:
                         raise
@@ -977,15 +1079,15 @@ def main():
                     comprobaciones = json.loads(texto)["comprobaciones"]
                     break
                 # Solo la regla incumplida: la respuesta puede citar el prompt.
-                print("::%s::Respuesta de Mistral rechazada (solicitud %d de %d): %s" % (
-                    "error" if solicitud == INTENTOS_RESPUESTA else "warning",
+                print("::%s::Respuesta de %s rechazada (solicitud %d de %d): %s" % (
+                    "error" if solicitud == INTENTOS_RESPUESTA else "warning", nombre,
                     solicitud, INTENTOS_RESPUESTA, ", ".join(diagnostico)))
     except urllib.error.HTTPError as fallo:
         error = "la API devolvió HTTP %d" % fallo.code
     except (urllib.error.URLError, TimeoutError):
-        error = "falló la conexión con Mistral o se agotó el tiempo de espera"
+        error = "falló la conexión con %s o se agotó el tiempo de espera" % nombre
     except ValueError as fallo:
-        error = "Mistral devolvió una respuesta incompleta o no válida"
+        error = "%s devolvió una respuesta incompleta o no válida" % nombre
         causa = getattr(fallo, "causa", "")
         if causa:
             error += " (`%s`)" % causa
@@ -1006,7 +1108,8 @@ def main():
                         ejecucion_url=ejecucion_url, intento=intento,
                         base=pr["base"]["sha"],
                         sin_verificar=sin_verificar if resultado is None else None,
-                        diagnostico=diagnostico if resultado is None else None)
+                        diagnostico=diagnostico if resultado is None else None,
+                        proveedor=proveedor, ruta=ruta)
     escribir_resumen(cuerpo)
     print(cuerpo)
     try:
