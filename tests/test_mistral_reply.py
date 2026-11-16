@@ -347,6 +347,50 @@ class TestLecturaGitMistral(unittest.TestCase):
         self.assertIn("no se dispone de su base histórica", mensajes[1]["content"])
 
 
+class TestSecretosYExcluidosMistralReply(unittest.TestCase):
+    """Revisión Codex de mistral-review#3: lo que el contraste añade al mensaje
+    (código de Git y comentarios) pasaba sin tachar y sin respetar `excluded`."""
+
+    VALOR = "valor" + "privado" + "deprueba"   # partido: no es un secreto real
+    FUENTE_GIT = 'def f():\n    api_key = "%s"\n    return api_key\n' % VALOR
+
+    def construir(self, fuente, entorno=None):
+        salida = mock.Mock(returncode=0, stdout=self.FUENTE_GIT.encode("utf-8"))
+        with mock.patch.object(mr, "obtener_diff", return_value=""), \
+                mock.patch.object(mr, "leer_guia", return_value=(None, "")), \
+                mock.patch.object(reply.subprocess, "run", return_value=salida) as run, \
+                mock.patch.dict(os.environ, entorno or {}):
+            mensajes, evidencias = reply.construir_mensajes(
+                [fuente], {"base": {"sha": "b" * 40}, "head": {"sha": SHA}})
+        return mensajes[1]["content"], evidencias, run
+
+    def test_codigo_y_comentario_van_tachados_y_las_citas_se_validan_tachadas(self):
+        fuente = dict(FUENTE, path="a.py", line=2, original_line=2, original_commit_id=SHA,
+                      body="token: %s es el valor que falla" % self.VALOR)
+        contenido, evidencias, _ = self.construir(fuente)
+        self.assertNotIn(self.VALOR, contenido)
+        self.assertIn("***", contenido)
+        tachada = mr.mask_secrets('api_key = "%s"' % self.VALOR)
+        self.assertIn("    " + tachada, evidencias["12"]["cabeza"]["a.py"])
+        self.assertTrue(reply.cita_valida(tachada, evidencias["12"]["cabeza"]["a.py"]))
+
+    def test_el_informe_publicado_tambien_se_tacha(self):
+        r = dict(RESPUESTA, explicacion='Con password=%s falla' % self.VALOR)
+        self.assertNotIn(self.VALOR, reply.renderizar([r], [FUENTE], "m", SHA, "u"))
+
+    def test_un_archivo_excluido_no_se_lee_ni_se_envia(self):
+        fuente = dict(FUENTE, path="gen/datos.py", line=2, original_line=2,
+                      original_commit_id=SHA)
+        contenido, evidencias, run = self.construir(fuente, {"MISTRAL_EXCLUIDOS": "gen/**"})
+        run.assert_not_called()
+        self.assertNotIn("return api_key", contenido)
+        self.assertEqual(evidencias["12"]["original"], {})
+        # Sin la exclusión, el mismo archivo sí se envía.
+        contenido, _, run = self.construir(fuente, {"MISTRAL_EXCLUIDOS": ""})
+        self.assertTrue(run.called)
+        self.assertIn("return api_key", contenido)
+
+
 class TestCitasPR157(unittest.TestCase):
     """Los tres rechazos `sin_coincidencia` de email-triage-plugin#157, reconstruidos.
 

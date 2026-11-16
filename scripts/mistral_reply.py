@@ -188,6 +188,10 @@ def fragmento_git(sha, ruta, linea):
         return None
     texto = salida.stdout.decode("utf-8", "replace")
     lineas = texto.splitlines()
+    # Lo que se envía y lo que valida las citas sale de las mismas líneas
+    # tachadas (revisión Codex, mistral-review#3): el AST usa el original solo
+    # para encontrar la función. `mask_secrets` no cruza saltos de línea.
+    tachadas = [mr.mask_secrets(l) for l in lineas]
     punto = min(max(int(linea or 1), 1), max(len(lineas), 1))
     inicio, fin = max(0, punto - 61), min(len(lineas), punto + 60)
     if ruta.endswith(".py"):
@@ -204,7 +208,7 @@ def fragmento_git(sha, ruta, linea):
         except (SyntaxError, ValueError, RecursionError):
             pass
     elegidas, longitud = [], 0
-    for linea_texto in lineas[inicio:fin]:
+    for linea_texto in tachadas[inicio:fin]:
         if longitud + len(linea_texto) + 1 > MAX_FRAGMENTO:
             break
         elegidas.append(linea_texto)
@@ -212,11 +216,13 @@ def fragmento_git(sha, ruta, linea):
     # `todas` solo sirve para diagnosticar una cita rechazada
     # (`fuera_de_ventana`); nunca para aceptarla: no se envió al modelo.
     return {"desde": inicio + 1, "hasta": inicio + len(elegidas),
-            "texto": "\n".join(elegidas), "lineas": set(elegidas), "todas": set(lineas)}
+            "texto": "\n".join(elegidas), "lineas": set(elegidas), "todas": set(tachadas)}
 
 
 def construir_mensajes(fuentes, pr):
-    diff = mr.obtener_diff(pr["base"]["sha"], pr["head"]["sha"])
+    # Tachado antes de indexar, como en la revisión: las citas se contrastan
+    # con lo que se envió.
+    diff = mr.mask_secrets(mr.obtener_diff(pr["base"]["sha"], pr["head"]["sha"]))
     # El diff común también permite contrastar respuestas sin ancla de línea
     # (p. ej. Claude publica con la cuenta del mantenedor). Solo + y contexto
     # son evidencia de la cabeza: una línea eliminada no describe el HEAD.
@@ -229,6 +235,11 @@ def construir_mensajes(fuentes, pr):
             ruta: set(lineas) for ruta, lineas in lineas_cabeza.items()}}
         completo = {"original": {}, "cabeza": {}}
         ruta = f.get("path")
+        # Un archivo excluido (`MISTRAL_EXCLUIDOS`) no sale del repo tampoco
+        # por aquí: la fuente se contrasta sin su código (revisión Codex,
+        # mistral-review#3).
+        if ruta and mr.excluido(ruta):
+            ruta = None
         # Una posición LEFT pertenece a la base del diff original, no al
         # original_commit_id (que es cabeza). Sin esa base histórica, no
         # atribuimos a otra versión el código que caiga en el mismo número.
@@ -260,7 +271,7 @@ def construir_mensajes(fuentes, pr):
         indice["completo"] = completo
         evidencias[identificador] = indice
         datos.append({"id": identificador, "autor": f["user"]["login"],
-            "comentario": f["body"][:MAX_COMENTARIO],
+            "comentario": mr.mask_secrets(f["body"][:MAX_COMENTARIO]),
             "comentario_recortado": len(f["body"]) > MAX_COMENTARIO,
             "lado": f.get("side"), "linea_original": f.get("original_line"),
             "sha_original": f.get("original_commit_id"),
@@ -269,6 +280,8 @@ def construir_mensajes(fuentes, pr):
             "codigo": codigo})
     mensajes, _ = mr.construir_mensajes(pr.get("title"), pr.get("body"), diff, mr.leer_guia())
     mensajes[0]["content"] = SISTEMA
+    # Cada dato ya va tachado: dentro del JSON, las comillas escapadas (\")
+    # dejarían pasar el valor al patrón.
     mensajes[1]["content"] += "\n\n## Fuentes y código parcial\n" + json.dumps(datos, ensure_ascii=False)
     return mensajes, evidencias
 
@@ -408,7 +421,8 @@ def renderizar(respuestas, fuentes, modelo, cabeza, url):
             partes.append("- `%s` (%s): `%s`" % (mr._linea(c["archivo"], 200),
                 c["version"], texto_modelo(c["fragmento"], 1000).replace("`", "'")))
     partes.append("Las citas validan ubicación; el dictamen del modelo requiere revisión humana.")
-    return "\n\n".join(partes)
+    # Como el informe de la revisión: un secreto que el modelo repita no se publica.
+    return mr.mask_secrets("\n\n".join(partes))
 
 
 def avisar_fallo(repo, numero, fuentes, cabeza, motivo, diagnostico=(), comentar=True):
