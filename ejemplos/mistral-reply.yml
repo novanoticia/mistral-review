@@ -1,0 +1,38 @@
+name: Mistral Reply to AI Reviews
+
+# Contrasta con Mistral los hallazgos que otras IAs dejan en los PR.
+# El script vive en novanoticia/mistral-review; aquí solo se llama.
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Número del PR (puede estar cerrado para un contraste histórico)
+        required: true
+      review_comment_id:
+        description: ID del hallazgo de línea de otra IA al que responder
+        required: true
+
+# Serializa eventos repetidos de la misma fuente; las reviews diferentes
+# conservan sus propias ejecuciones y no se expulsan de la cola entre sí.
+concurrency:
+  group: mistral-reply-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}-${{ github.event.review.id || github.event.comment.pull_request_review_id || github.event.comment.id || inputs.review_comment_id }}
+  cancel-in-progress: false
+
+jobs:
+  mistral-reply:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: novanoticia/mistral-review/.github/workflows/reply.yml@main
+    with:
+      model: ${{ vars.MISTRAL_MODEL }}
+      reply_model: ${{ vars.MISTRAL_REPLY_MODEL }}
+    secrets:
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}

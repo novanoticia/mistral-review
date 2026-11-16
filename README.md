@@ -50,6 +50,24 @@ comprobarlos antes de actuar.
 `main`; cuando haya una etiqueta (`v1`), se puede fijar en ambos sitios para que
 un cambio aquí no llegue a todos los repos sin control.
 
+## Contraste de revisiones de otras IAs (opcional)
+
+`reply.yml` contrasta por lectura los hallazgos que dejan en un PR otras IAs
+(Codex, Claude, Copilot, CodeRabbit, Gemini) o comentarios firmados como
+asistidos por Claude. Responde con un dictamen por hallazgo —de acuerdo, no se
+sostiene, ya corregido o pendiente—, con citas literales del código. Solo
+comenta: no aplica parches. Un rechazo de la respuesta del modelo va al
+resumen de Actions, no al PR.
+
+Para activarlo, copia [`ejemplos/mistral-reply.yml`](ejemplos/mistral-reply.yml)
+en `.github/workflows/` del repo. Usa el mismo secreto y, opcionalmente, la
+variable `MISTRAL_REPLY_MODEL` para probar otro modelo solo aquí. También se
+puede lanzar a mano (**Actions → Mistral Reply to AI Reviews → Run workflow**)
+con el número del PR y el id del comentario.
+
+Procede de `email-triage-plugin`; su historia y sus límites están en el
+docstring de [`scripts/mistral_reply.py`](scripts/mistral_reply.py).
+
 ## Coste
 
 Con `zai-glm-5-3-flash` (0,15 / 0,50 USD por millón de tokens de entrada /
@@ -67,8 +85,8 @@ Solo biblioteca estándar de Python, sin red ni API en los tests.
 Procedencia: fusiona las cuatro copias que tenían `email-triage-plugin`
 (base), `claude-skills-exporter`, `multilang-repo-skill` y `repo-auditor-ia`
 (contexto de shell y `mask_secrets`). El contraste de respuestas a otras IAs
-(`mistral_reply.py`) y la evaluación (`mistral_eval.py`) siguen, por ahora, en
-`email-triage-plugin`.
+(`mistral_reply.py`) se trajo después; la evaluación (`mistral_eval.py`) sigue,
+por ahora, en `email-triage-plugin`.
 
 ---
 

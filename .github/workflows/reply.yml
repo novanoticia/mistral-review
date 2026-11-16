@@ -1,0 +1,87 @@
+name: Mistral Reply to AI Reviews (reutilizable)
+
+# Workflow reutilizable: lo llama el workflow de cada repo (ver
+# ejemplos/mistral-reply.yml). Contrasta por lectura los hallazgos que otras
+# IAs (Codex, Claude, Copilot...) dejan en un PR del repo que llama, con el
+# script de este repo. Solo comenta: nunca aplica parches ni ejecuta el PR.
+#
+# La concurrencia va en el workflow que llama, como en review.yml.
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: Modelo de la revisión (MISTRAL_MODEL); vacío usa el del script (zai-glm-5-3-flash)
+        type: string
+        default: ""
+      reply_model:
+        description: Modelo propio del contraste (MISTRAL_REPLY_MODEL); vacío = model
+        type: string
+        default: ""
+      excluded:
+        description: Pathspecs que no se envían (generados), uno por línea o separados por comas
+        type: string
+        default: ""
+      guides:
+        description: Archivos de guía del proyecto, por orden de preferencia; vacío = REVIEW.md, AGENTS.md, CLAUDE.md
+        type: string
+        default: ""
+      ref:
+        description: Rama o etiqueta de novanoticia/mistral-review cuyo script se ejecuta; debe coincidir con la de `uses:`
+        type: string
+        default: main
+    secrets:
+      MISTRAL_API_KEY:
+        required: false
+
+jobs:
+  responder:
+    # El contexto `github` es el del repo que llama: mismos filtros que tenía
+    # email-triage-plugin. Nunca responde a GitHub Actions (ni a sí mismo) y,
+    # en eventos automáticos, solo a PR del propio repo.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      ((github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment') &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.review.user.login != 'github-actions[bot]' &&
+       github.event.comment.user.login != 'github-actions[bot]') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       github.event.comment.user.login != 'github-actions[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Rama de confianza del repo que llama: el PR solo se lee con Git.
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          # El script hace `git fetch` de refs/pull/N/head: sin credenciales,
+          # un repo privado no lo deja. Solo corre código de este repo, y el
+          # mismo script ya recibe GH_TOKEN para la API.
+          persist-credentials: true
+
+      - uses: actions/checkout@v4
+        with:
+          repository: novanoticia/mistral-review
+          ref: ${{ inputs.ref }}
+          path: .mistral-review
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.12+, como review.yml (el parser de 3.11 agota la recursión).
+          python-version: '3.12'
+
+      - name: Contrastar y comentar, sin aplicar parches
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MISTRAL_MODEL: ${{ inputs.model }}
+          MISTRAL_REPLY_MODEL: ${{ inputs.reply_model }}
+          MISTRAL_EXCLUIDOS: ${{ inputs.excluded }}
+          MISTRAL_GUIAS: ${{ inputs.guides }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .mistral-review/scripts/mistral_reply.py
