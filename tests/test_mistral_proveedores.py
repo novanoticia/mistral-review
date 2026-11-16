@@ -84,6 +84,14 @@ class TestConfiguracion(unittest.TestCase):
                 with self.assertRaisesRegex(mr.ConfiguracionInvalida, "organización/modelo"):
                     mr.configuracion()
 
+    def test_mistral_rechaza_un_modelo_de_openrouter_olvidado(self):
+        with entorno(MISTRAL_MODEL="z-ai/glm-5.3-flash"):
+            with self.assertRaisesRegex(mr.ConfiguracionInvalida, "parece un modelo de OpenRouter"):
+                mr.configuracion()
+        with entorno(MISTRAL_PROVEEDOR="mistral"):
+            with self.assertRaises(mr.ConfiguracionInvalida):
+                mr.configuracion("deepseek/deepseek-v4.1-flash")
+
     def test_ruta_de_openrouter_no_valida(self):
         for ruta in ("Z-AI", "z-ai;rm", "a/b/c/d/e", "https://x"):
             with self.subTest(ruta=ruta), entorno(

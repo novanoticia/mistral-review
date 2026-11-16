@@ -83,6 +83,12 @@ def configuracion(modelo=""):
     modelo = (modelo or os.environ.get("MISTRAL_MODEL") or "").strip()
     ruta = os.environ.get("MISTRAL_OPENROUTER_PROVEEDOR", "").strip()
     if proveedor == "mistral":
+        if "/" in modelo:
+            # Al volver de OpenRouter es fácil dejar su modelo en MISTRAL_MODEL;
+            # la API de Mistral respondería un 400 poco claro.
+            raise ConfiguracionInvalida(
+                "con Mistral el modelo no lleva `/`; parece un modelo de OpenRouter: "
+                "cambia MISTRAL_MODEL o usa provider: openrouter")
         if ruta:
             # Volver a Mistral sin borrar la variable no debe romper la revisión.
             print("::warning::openrouter_provider solo se usa con OpenRouter; se ignora.")

@@ -114,9 +114,9 @@ modelo por su cuenta.
 
 **Volver a Mistral:** en **Variables**, borra `MISTRAL_PROVIDER` (o déjala en
 `mistral`) y devuelve `MISTRAL_MODEL` a un modelo de Mistral (o bórrala para
-usar `zai-glm-5-3-flash`). **Las dos cosas**: un identificador de OpenRouter
-enviado a Mistral da error HTTP 400. `OPENROUTER_PROVIDER` se ignora con un
-aviso y el secreto puede quedarse.
+usar `zai-glm-5-3-flash`). **Las dos cosas**: si queda un identificador de
+OpenRouter (con `/`), el check falla con un mensaje que lo dice, sin llamar a
+la API. `OPENROUTER_PROVIDER` se ignora con un aviso y el secreto puede quedarse.
 
 **Cómo se configura la petición** (fijo, no se elige):
 
