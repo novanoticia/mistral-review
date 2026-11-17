@@ -205,3 +205,38 @@ de quedar obsoleto), así que hay que vigilar su fecha de retirada en la
 página de modelos. Gasto medido de las ejecuciones #6 a #13 (incluidas #7,
 ~0,08 $, y #10, menos de 0,01 $, que no salen en la tabla): ~1,73 $. Las #2 a
 #4 son de una sesión anterior y su coste es una estimación (~1,09 $).
+
+## Primera prueba con OpenRouter (2026-11-17)
+
+Prueba de funcionamiento, no de calidad: un caso (`solo:
+c1-guarda-invertida`), una repetición, en `email-triage-plugin` con
+`proveedor: openrouter`, `modelo: z-ai/glm-5.3-flash` y `proveedor_final:
+z-ai` (el mismo GLM 5.3 Flash que usa el revisor con Mistral, servido por
+Z.AI). Primera llamada real a OpenRouter.
+
+| Proveedor | Modelo | Control | Tokens (entrada / salida) | Coste |
+|---|---|---|---|---|
+| OpenRouter (Z.AI) | `z-ai/glm-5.3-flash` | acierto | 14.032 / 6.821 | 0,00546 créditos (declarado) |
+
+- **Funciona de punta a punta:** 1 de 1 revisiones válidas, una sola
+  petición HTTP, sin reintentos ni cortes por `length`, y el informe y el
+  artefacto dicen qué se midió (`proveedor`, `ruta`, `modelo`).
+- **El hallazgo es un acierto** (etiquetado a mano): señala la guarda
+  invertida con sus dos fallos (0 % con correos y `ZeroDivisionError` sin
+  ellos), con escenario concreto y el arreglo exacto. El único pendiente
+  (no hay test que cubra `_porcentaje`) es cierto y no es ruido.
+- **Coste:** la tarifa del endpoint de Z.AI en el catálogo de OpenRouter es la
+  misma que la de Mistral (0,15 / 0,50 $ por millón); con estos tokens da
+  ~0,0055 $, y la API declaró 0,00546 créditos. Indica que un crédito equivale
+  a un dólar, sin confirmar (la pequeña diferencia puede ser entrada en
+  caché). Por revisión cuesta lo mismo que con Mistral (~0,006 $ en la #11).
+- **Calidad frente a Mistral:** ambos aciertan el control; con un caso y una
+  repetición no se puede decir que uno sea mejor.
+- **Sin confirmar:** qué proveedor sirvió la petición. El script guarda la
+  `ruta` pedida, no lo que responde la API; con `allow_fallbacks: false` solo
+  pudo ser Z.AI, pero no consta en el artefacto.
+- Fijar `proveedor_final` importa: el mismo modelo lo sirven en OpenRouter
+  más de cuarenta proveedores, varios cuantizados en fp4 y algunos sin
+  `response_format`; sin fijarlo, cada petición puede ir a uno distinto.
+- En el resumen de la ejecución el escenario se corta a 400 caracteres a
+  propósito; el texto completo está en el artefacto `mistral-eval`.
