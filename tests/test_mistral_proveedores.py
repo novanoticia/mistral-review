@@ -513,6 +513,42 @@ class TestEvaluacionConProveedor(unittest.TestCase):
         self.assertAlmostEqual(presupuesto.coste, 0.0002)
         self.assertEqual(presupuesto.respondidas, 3)
 
+    def test_anota_quien_sirvio_cada_respuesta(self):
+        ev = self.ev
+        servida = dict(eleccion(), provider="Z.AI", model="z-ai/glm-5.3-flash")
+        rara = dict(eleccion(), provider="Z.AI\n<script>`x`" + "a" * 100, model=7)
+        with mock.patch.object(ev.mr.urllib.request, "urlopen", side_effect=[
+                respuesta_http(servida), respuesta_http(servida),
+                respuesta_http(eleccion()), respuesta_http(rara)]):
+            with ev.Presupuesto(5) as presupuesto:
+                for _ in range(4):
+                    ev.mr.llamar_mistral([], "z-ai/x", "k", proveedor="openrouter")
+        rara_saneada = ("Z.AIscriptx" + "a" * 100)[:60]
+        self.assertEqual(presupuesto.servido_por,
+                         {"Z.AI": 2, "no lo informa": 1, rara_saneada: 1})
+        self.assertEqual(presupuesto.modelo_servido,
+                         {"z-ai/glm-5.3-flash": 2, "no lo informa": 2})
+
+    def test_el_informe_y_el_artefacto_dicen_quien_sirvio(self):
+        ev = self.ev
+        servida = dict(eleccion(), provider="Z.AI", model="z-ai/glm-5.3-flash")
+
+        def revisar(*_, **__):
+            ev.mr.llamar_mistral([], "z-ai/glm-5.3-flash", "k", proveedor="openrouter")
+            return {"estado": "valida", "detalle": "", "solicitudes": 1,
+                    "recortado": False, "hallazgos": [], "pendientes": []}
+
+        variables = {"MISTRAL_PROVEEDOR": "openrouter", "MISTRAL_MODEL": "z-ai/glm-5.3-flash",
+                     "OPENROUTER_API_KEY": CLAVE_OR}
+        with mock.patch.object(ev.mr.urllib.request, "urlopen",
+                               return_value=respuesta_http(servida)):
+            codigo, _, salida, guardado = self.main([], variables, efecto=revisar)
+        self.assertEqual(codigo, 0)
+        self.assertIn("Servida por (según la API): `Z.AI` (1). "
+                      "Modelo servido: `z-ai/glm-5.3-flash` (1).", salida)
+        self.assertEqual(guardado["servido_por"], {"Z.AI": 1})
+        self.assertEqual(guardado["modelo_servido"], {"z-ai/glm-5.3-flash": 1})
+
 
 try:
     import yaml

@@ -103,7 +103,9 @@ nunca al resumen. Usa el secreto `MISTRAL_API_KEY` y la variable
 **Comparar proveedores y modelos.** Los casos y los criterios son los mismos
 para cualquier configuración. El encabezado del informe y el JSON del
 artefacto (`proveedor`, `ruta`, `modelo`, `esfuerzo`, `max_salida`) dicen
-qué se midió; dos ejecuciones solo se comparan si eso consta. Con OpenRouter,
+qué se midió; dos ejecuciones solo se comparan si eso consta. El informe y
+el artefacto (`servido_por`, `modelo_servido`) dicen también quién sirvió
+cada respuesta según la API, o «no lo informa» si la respuesta no lo trae. Con OpenRouter,
 fija `OPENROUTER_PROVIDER`: si no, cada petición puede ir a un proveedor
 distinto y la comparación pierde sentido. Que una configuración encuentre más
 defectos en una ejecución no prueba que sea mejor: hacen falta varias
@@ -232,9 +234,12 @@ Z.AI). Primera llamada real a OpenRouter.
   caché). Por revisión cuesta lo mismo que con Mistral (~0,006 $ en la #11).
 - **Calidad frente a Mistral:** ambos aciertan el control; con un caso y una
   repetición no se puede decir que uno sea mejor.
-- **Sin confirmar:** qué proveedor sirvió la petición. El script guarda la
+- **Sin confirmar:** qué proveedor sirvió la petición. El script guardaba la
   `ruta` pedida, no lo que responde la API; con `allow_fallbacks: false` solo
-  pudo ser Z.AI, pero no consta en el artefacto.
+  pudo ser Z.AI, pero no consta en el artefacto. Desde entonces se anota el
+  `provider` de la respuesta (`servido_por`); la documentación de OpenRouter
+  no lo incluye en la respuesta sin streaming, así que puede salir «no lo
+  informa».
 - Fijar `proveedor_final` importa: el mismo modelo lo sirven en OpenRouter
   más de cuarenta proveedores, varios cuantizados en fp4 y algunos sin
   `response_format`; sin fijarlo, cada petición puede ir a uno distinto.
