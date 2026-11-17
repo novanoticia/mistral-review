@@ -223,10 +223,19 @@ def mask_secrets(texto):
     Es una lista de bloqueo, no una garantía: un formato raro puede escapar.
     Un valor que empieza por `${{` es una expresión de GitHub Actions (una
     referencia como `${{ secrets.X }}`, no el secreto): no se tacha
-    (claude-skills-exporter#23, confundía al modelo).
+    (claude-skills-exporter#23, confundía al modelo). Tampoco un «valor»
+    hecho solo de comillas invertidas: es el cierre de un nombre citado en
+    prosa (`` `secrets:` el bloque ``), no un secreto; antes salía
+    `` `secrets:*** el bloque ``. Ni `secrets: inherit`, la palabra clave con
+    la que un workflow reutilizable hereda los secretos del que lo llama.
     """
     patron = r'''((?:api[_-]?key|secret|passw(?:or)?d|token|private[_-]?key)[a-z0-9_]*["']?[ \t]*[:=][ \t]*["']?)(?!\$\{\{)([^\s"',;}]+)'''
     def ocultar(match):
+        if not match.group(2).strip("`"):
+            return match.group(0)
+        if match.group(2) == "inherit" and re.match(
+                r"secrets[\"']?[ \t]*:", match.group(1), re.IGNORECASE):
+            return match.group(0)
         return match.group(1) + "***"
     return re.sub(patron, ocultar, texto, flags=re.IGNORECASE)
 

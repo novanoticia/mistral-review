@@ -84,6 +84,28 @@ class TestSecretos(unittest.TestCase):
                 self.assertIn("***", tachado)
         self.assertEqual(mr.mask_secrets("x = 1\nnombre = 'ana'"), "x = 1\nnombre = 'ana'")
 
+    def test_no_tacha_nombres_citados_en_prosa(self):
+        # `` `secrets:` el bloque `` salía como `` `secrets:*** el bloque ``:
+        # la comilla invertida que cierra el nombre no es un valor.
+        for linea in ("el bloque `secrets:` de `workflow_call`",
+                      "la variable `MISTRAL_API_KEY:` y luego",
+                      "con ``token=`` vacío"):
+            with self.subTest(linea=linea):
+                self.assertEqual(mr.mask_secrets(linea), linea)
+        # Un secreto entre comillas invertidas se sigue tachando.
+        self.assertEqual(mr.mask_secrets("api_key: `%s`" % VALOR), "api_key: ***")
+        self.assertEqual(mr.mask_secrets("api_key:`%s`" % VALOR), "api_key:***")
+
+    def test_no_tacha_secrets_inherit(self):
+        # Palabra clave de los workflows reutilizables, no un secreto.
+        for linea in ("    secrets: inherit", '"secrets": inherit'):
+            with self.subTest(linea=linea):
+                self.assertEqual(mr.mask_secrets(linea), linea)
+        # Solo con la clave `secrets` y la palabra exacta.
+        self.assertEqual(mr.mask_secrets("password: inherit"), "password: ***")
+        self.assertEqual(mr.mask_secrets("my_secret: inherit"), "my_secret: ***")
+        self.assertEqual(mr.mask_secrets("secrets: inherited"), "secrets: ***")
+
     def test_no_tacha_expresiones_de_github_actions(self):
         # Una expresión `${{ … }}` es una referencia, no un valor: tacharla
         # deja `secrets:` como `***` y confunde al modelo (claude-skills-exporter#23).

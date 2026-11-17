@@ -245,3 +245,37 @@ Z.AI). Primera llamada real a OpenRouter.
   `response_format`; sin fijarlo, cada petición puede ir a uno distinto.
 - En el resumen de la ejecución el escenario se corta a 400 caracteres a
   propósito; el texto completo está en el artefacto `mistral-eval`.
+
+## Qwen3 Coder Next vía OpenRouter (2026-11-17)
+
+Los 13 casos, una repetición, con `proveedor: openrouter`, `modelo:
+qwen/qwen3-coder-next` y `proveedor_final: parasail` (único proveedor del
+modelo; bf16). Se eligió por ser barato y estar hecho para código. Ejecución
+con `v1.2`: el artefacto no dice quién sirvió las respuestas.
+
+| Modelo | Control | Defectos reales | Ruido en negativos | Válidas | Coste |
+|---|---|---|---|---|---|
+| `qwen/qwen3-coder-next` (Parasail) | acierto | 0 de 6 medidos (p199 inválida) | 2 hallazgos falsos | 12 de 13 | 0,061 créditos (declarado) |
+| `zai-glm-5-3-flash` (Mistral, #11) | acierto | 0 de 7 | ninguno | 13 de 13 | 0,08 $ |
+
+Etiquetado a mano:
+
+- **Control:** acierto, con un escenario algo impreciso (dice que `0/0`
+  falla «si n no fuera 0»; con n = 0 también falla).
+- **Positivos:** ningún hallazgo en p123, p125, p126, p143 ni
+  p200-recursión. En p200-última-línea, un hallazgo especulativo que no es
+  el defecto. p199 quedó inválida tras dos intentos (citas fuera del diff;
+  el primero inventaba un `NameError`).
+- **Negativos:** en n140, un hallazgo de severidad **alta** cuyo propio
+  escenario acaba en «No hay error aquí»; en n114, que la severidad
+  distingue mayúsculas, cuando el prompt las exige en minúscula. n108, n116
+  y n123, limpios.
+- **Formato:** 2 de 15 respuestas rechazadas (una con `fragment` en vez de
+  `fragmento`, corregida al reintento). 15 peticiones en total.
+- **Tokens:** 477.033 de entrada y 17.930 de salida, unos 1.200 de salida
+  por respuesta frente a los ~6.800 de GLM 5.3 Flash en la prueba del
+  control. Hipótesis sin verificar: apenas razona, y eso explicaría el ruido.
+
+**Conclusión:** con una repetición no es concluyente, pero no hay nada a
+favor de cambiar: ve lo mismo que GLM 5.3 Flash, con más ruido y peor
+formato, a un coste parecido. El revisor sigue con `zai-glm-5-3-flash`.
