@@ -97,6 +97,9 @@ class Presupuesto:
         # Coste que declara OpenRouter en `usage.cost` (créditos). Mistral no
         # lo envía: entonces se dice que falta, sin estimarlo.
         self.coste, self.con_coste = 0.0, 0
+        # Quién sirvió cada respuesta según la API: `provider` (OpenRouter; su
+        # doc no lo promete sin streaming) y `model`. Recuentos por nombre.
+        self.servido_por, self.modelo_servido = {}, {}
         # Tras el primer rechazo de `reasoning_effort`, las demás peticiones ya
         # salen sin él: cada revisión gastaba una petición rechazada (400) y
         # otra buena (ejecuciones #3 y #4: 26 y 24 de 80).
@@ -114,9 +117,11 @@ class Presupuesto:
         return _Respuesta(self._abrir(req, *args, **kwargs), self, req)
 
     def anotar(self, datos, req):
-        """Suma los tokens de una respuesta. Solo números: nada del contenido."""
+        """Suma los tokens de una respuesta y anota quién la sirvió. Solo
+        números y nombres saneados: nada del contenido."""
         try:
-            uso = json.loads(datos).get("usage")
+            respuesta = json.loads(datos)
+            uso = respuesta.get("usage")
             entrada, salida = uso.get("prompt_tokens"), uso.get("completion_tokens")
         except (ValueError, AttributeError):
             return
@@ -126,6 +131,10 @@ class Presupuesto:
         self.entrada += entrada
         self.salida += salida
         self.respondidas += 1
+        for campo, recuento in (("provider", self.servido_por),
+                                ("model", self.modelo_servido)):
+            nombre = _nombre_servido(respuesta.get(campo))
+            recuento[nombre] = recuento.get(nombre, 0) + 1
         coste = uso.get("cost")
         if isinstance(coste, (int, float)) and not isinstance(coste, bool) and coste >= 0:
             self.coste += coste
@@ -144,6 +153,19 @@ class Presupuesto:
     def __exit__(self, *exc):
         mr.urllib.request.urlopen = self._abrir
         return False
+
+
+def _nombre_servido(valor):
+    """Nombre de proveedor o modelo apto para el informe: alfabeto fijo y
+    tope de longitud, para que nada raro de la respuesta llegue al resumen.
+    Sin valor, «no lo informa»."""
+    if not isinstance(valor, str):
+        return "no lo informa"
+    return re.sub(r"[^A-Za-z0-9 ._:/-]", "", valor).strip()[:60] or "no lo informa"
+
+
+def _recuentos(recuento):
+    return ", ".join("`%s` (%d)" % par for par in sorted(recuento.items()))
 
 
 def _quitar_esfuerzo(req):
@@ -594,6 +616,8 @@ def main(argv=None):
                            "sin_esfuerzo": presupuesto.sin_esfuerzo,
                            "coste": presupuesto.coste if presupuesto.con_coste else None,
                            "con_coste": presupuesto.con_coste},
+                "servido_por": presupuesto.servido_por,
+                "modelo_servido": presupuesto.modelo_servido,
                 "casos": casos, "resultados": resultados}
 
     # Solo cambia en este proceso: el revisor de los PR sigue con el suyo.
@@ -628,6 +652,9 @@ def main(argv=None):
                 "%d tokens por respuesta, con %d s de espera.\n" % (
                     presupuesto.entrada, presupuesto.salida, presupuesto.respondidas,
                     esfuerzo or "ninguno, el del modelo", max_salida, presupuesto.espera))
+    if presupuesto.respondidas:
+        informe += ("\nServida por (según la API): %s. Modelo servido: %s.\n" % (
+            _recuentos(presupuesto.servido_por), _recuentos(presupuesto.modelo_servido)))
     if presupuesto.con_coste:
         informe += ("\nCoste según la API: %.6f créditos en %d de %d respuesta(s) con "
                     "recuento.\n" % (presupuesto.coste, presupuesto.con_coste,
