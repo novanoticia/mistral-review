@@ -664,7 +664,9 @@ class TestWorkflowMistralReply(unittest.TestCase):
         trabajo = ejemplo["jobs"]["mistral-reply"]
         self.assertEqual(trabajo["uses"],
                          "novanoticia/mistral-review/.github/workflows/reply.yml@main")
-        self.assertEqual(trabajo["with"]["reply_model"], "${{ vars.MISTRAL_REPLY_MODEL }}")
+        # Modelo propio del contraste solo con Mistral (es un modelo de Mistral).
+        self.assertEqual(trabajo["with"]["reply_model"],
+                         "${{ vars.MISTRAL_PROVIDER != 'openrouter' && vars.MISTRAL_REPLY_MODEL || '' }}")
         # La concurrencia va en el que llama, sin cancelar fuentes distintas.
         self.assertFalse(ejemplo["concurrency"]["cancel-in-progress"])
         reutilizable = self.cargar(".github/workflows/reply.yml")

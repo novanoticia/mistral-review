@@ -602,6 +602,9 @@ class TestWorkflowsConProveedor(unittest.TestCase):
                 self.assertLessEqual(set(trabajo["with"]), set(llamada["inputs"]))
                 self.assertLessEqual(set(trabajo["secrets"]), set(llamada["secrets"]))
                 self.assertEqual(trabajo["with"]["provider"], "${{ vars.MISTRAL_PROVIDER }}")
+                # Cada proveedor, su variable de modelo: OpenRouter nunca toma
+                # MISTRAL_MODEL (sin OPENROUTER_MODEL, el revisor falla y lo dice).
+                self.assertEqual(trabajo["with"]["model"], "${{ vars.MISTRAL_PROVIDER == \'openrouter\' && vars.OPENROUTER_MODEL || vars.MISTRAL_PROVIDER != \'openrouter\' && vars.MISTRAL_MODEL || \'\' }}")
 
 
 if __name__ == "__main__":
