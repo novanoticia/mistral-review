@@ -37,9 +37,10 @@ jobs:
       modelo: ${{ inputs.modelo }}
       esfuerzo: ${{ inputs.esfuerzo }}
       max_salida: ${{ inputs.max_salida }}
-      model: ${{ vars.MISTRAL_MODEL }}
-      # Proveedor: vacío = Mistral. Para OpenRouter, variable MISTRAL_PROVIDER
-      # = openrouter, MISTRAL_MODEL = organización/modelo y secreto OPENROUTER_API_KEY.
+      # Proveedor (ver README, «Usar OpenRouter»): sin la variable MISTRAL_PROVIDER,
+      # o con `mistral`, revisa Mistral con MISTRAL_MODEL; con `openrouter`, OpenRouter
+      # con OPENROUTER_MODEL. Cambiar de proveedor = cambiar solo MISTRAL_PROVIDER.
+      model: ${{ vars.MISTRAL_PROVIDER == 'openrouter' && vars.OPENROUTER_MODEL || vars.MISTRAL_PROVIDER != 'openrouter' && vars.MISTRAL_MODEL || '' }}
       provider: ${{ vars.MISTRAL_PROVIDER }}
       openrouter_provider: ${{ vars.OPENROUTER_PROVIDER }}
     secrets:

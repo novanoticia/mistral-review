@@ -32,10 +32,13 @@ jobs:
       pull-requests: write
     uses: novanoticia/mistral-review/.github/workflows/reply.yml@main
     with:
-      model: ${{ vars.MISTRAL_MODEL }}
-      reply_model: ${{ vars.MISTRAL_REPLY_MODEL }}
-      # Proveedor: vacío = Mistral. Para OpenRouter, variable MISTRAL_PROVIDER
-      # = openrouter, MISTRAL_MODEL = organización/modelo y secreto OPENROUTER_API_KEY.
+      # Proveedor (ver README, «Usar OpenRouter»): sin la variable MISTRAL_PROVIDER,
+      # o con `mistral`, revisa Mistral con MISTRAL_MODEL; con `openrouter`, OpenRouter
+      # con OPENROUTER_MODEL. Cambiar de proveedor = cambiar solo MISTRAL_PROVIDER.
+      model: ${{ vars.MISTRAL_PROVIDER == 'openrouter' && vars.OPENROUTER_MODEL || vars.MISTRAL_PROVIDER != 'openrouter' && vars.MISTRAL_MODEL || '' }}
+      # MISTRAL_REPLY_MODEL (opcional) es un modelo de Mistral solo para el contraste;
+      # con OpenRouter no se usa y el contraste toma el modelo de la revisión.
+      reply_model: ${{ vars.MISTRAL_PROVIDER != 'openrouter' && vars.MISTRAL_REPLY_MODEL || '' }}
       provider: ${{ vars.MISTRAL_PROVIDER }}
       openrouter_provider: ${{ vars.OPENROUTER_PROVIDER }}
     secrets:

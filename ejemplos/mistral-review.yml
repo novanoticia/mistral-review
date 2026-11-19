@@ -1,7 +1,8 @@
 # Copia este archivo en .github/workflows/mistral-review.yml del repo que
 # quieras revisar. Necesita el secreto MISTRAL_API_KEY y, opcionalmente, la
 # variable MISTRAL_MODEL (Settings → Secrets and variables → Actions). Para
-# usar OpenRouter en su lugar, ver README (sección OpenRouter).
+# usar OpenRouter en su lugar, ver README (sección «Usar OpenRouter»): no hay
+# que tocar este archivo, solo variables y un secreto.
 name: Mistral PR Review
 
 on:
@@ -20,9 +21,10 @@ jobs:
       contents: read
     uses: novanoticia/mistral-review/.github/workflows/review.yml@main
     with:
-      model: ${{ vars.MISTRAL_MODEL }}
-      # Proveedor: vacío = Mistral. Para OpenRouter, variable MISTRAL_PROVIDER
-      # = openrouter, MISTRAL_MODEL = organización/modelo y secreto OPENROUTER_API_KEY.
+      # Proveedor (ver README, «Usar OpenRouter»): sin la variable MISTRAL_PROVIDER,
+      # o con `mistral`, revisa Mistral con MISTRAL_MODEL; con `openrouter`, OpenRouter
+      # con OPENROUTER_MODEL. Cambiar de proveedor = cambiar solo MISTRAL_PROVIDER.
+      model: ${{ vars.MISTRAL_PROVIDER == 'openrouter' && vars.OPENROUTER_MODEL || vars.MISTRAL_PROVIDER != 'openrouter' && vars.MISTRAL_MODEL || '' }}
       provider: ${{ vars.MISTRAL_PROVIDER }}
       openrouter_provider: ${{ vars.OPENROUTER_PROVIDER }}
       # Archivos generados que no merece la pena revisar (opcional):
