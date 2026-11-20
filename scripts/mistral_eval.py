@@ -303,7 +303,7 @@ def cargar_casos(ruta):
 
 
 def _rangos_objetivo(texto, lineas):
-    """Rangos donde un hallazgo cuenta como acierto; [] si no parsea.
+    """Rangos de referencia para localizar citas. Devuelve [] si no parsea.
 
     Las funciones que contienen una línea cambiada y, fuera de toda función,
     solo esa línea. No se usa `mr._rangos_python`: da contexto, y su ventana
@@ -328,17 +328,18 @@ def _rangos_objetivo(texto, lineas):
 
 
 def objetivos(caso):
-    """{archivo: [(inicio, fin, nombre)]} donde debería caer un hallazgo.
+    """{archivo: [(inicio, fin, nombre)]} de referencia para localizar citas.
 
-    Positivo: funciones de `cabeza` (código Python, no tests) que el arreglo
-    tocó, y las líneas sueltas de módulo que cambió. Se calcula con el diff al revés (arreglo → cabeza), cuyo lado nuevo
-    es la cabeza. Negativo: los archivos enteros de los hallazgos falsos.
+    Para un positivo se usa el diff de `arreglo` a `cabeza` para encontrar los
+    rangos del código Python que se corrigió, excluidos los tests. Para un
+    negativo se usan los archivos de los hallazgos históricos.
     """
     if caso["tipo"] == "negativo":
         return {archivo: [] for archivo in caso["archivos"]}
+    exclusiones = [":(exclude)%s" % ruta for ruta in mr.excluidos()]
     inverso = git("-c", "core.quotePath=true", "diff", "--no-color", "--no-ext-diff",
                   "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-U0",
-                  caso["arreglo"], caso["cabeza"], "--", ".")
+                  caso["arreglo"], caso["cabeza"], "--", ".", *exclusiones)
     destino = {}
     for archivo, lineas in sorted(mr.lineas_cambiadas(inverso).items()):
         if (not archivo.endswith(".py") or mr._es_test(archivo)
@@ -352,6 +353,40 @@ def objetivos(caso):
         if rangos:
             destino[archivo] = rangos
     return destino
+
+
+class CasoNoEvaluable(ValueError):
+    """El caso requiere preparación antes de consultar al modelo."""
+
+
+def _datos_caso(caso):
+    """Prepara el diff efectivo y la referencia de un caso evaluable."""
+    diff = mr.obtener_diff(caso["base"], caso["cabeza"])
+    if not diff.strip():
+        raise CasoNoEvaluable("diff vacío tras aplicar exclusiones")
+    destino = objetivos(caso)
+    if caso["tipo"] == "positivo" and not destino:
+        raise CasoNoEvaluable("positivo sin objetivo derivable tras aplicar exclusiones")
+    return diff, destino
+
+
+def _numeros_de_linea(linea, numero):
+    return {numero, numero - 1} - {0} if linea.startswith("-") else {numero}
+
+
+def _en_objetivo(numeros, rangos):
+    return any(inicio <= n <= fin for n in numeros for inicio, fin, _ in rangos)
+
+
+def _cita_directa_visible(diff, destino):
+    """Indica si una línea citable del prefijo coincide con la referencia."""
+    for ruta, linea, numero in mr._lineas_de_hunks(diff):
+        rangos = destino.get(ruta)
+        if rangos is None or not any(c.isalnum() for c in linea[1:]):
+            continue
+        if not rangos or _en_objetivo(_numeros_de_linea(linea, numero), rangos):
+            return True
+    return False
 
 
 def lineas_citadas(diff, archivo, fragmento):
@@ -372,9 +407,6 @@ def lineas_citadas(diff, archivo, fragmento):
     if not any(any(c.isalnum() for c in t) for t in trozos):
         return set()
 
-    def numeros_de(linea, numero):
-        return {numero, numero - 1} - {0} if linea.startswith("-") else {numero}
-
     # Hunks del archivo, sin líneas en blanco (tampoco cuentan en la cita).
     hunks, esperado = [], None
     for ruta, linea, numero in mr._lineas_de_hunks(diff):
@@ -391,7 +423,7 @@ def lineas_citadas(diff, archivo, fragmento):
             tramo = hunk[inicio:inicio + len(trozos)]
             if all(mr._misma_linea(t, l) for t, (l, _) in zip(trozos, tramo)):
                 for linea, numero in tramo:
-                    numeros |= numeros_de(linea, numero)
+                    numeros |= _numeros_de_linea(linea, numero)
     return numeros
 
 
@@ -401,7 +433,7 @@ def clasificar(hallazgo, diff, destino):
     if rangos is None:
         return "fuera"
     numeros = lineas_citadas(diff, hallazgo["archivo"], hallazgo["fragmento"])
-    if any(inicio <= n <= fin for n in numeros for inicio, fin, _ in rangos):
+    if _en_objetivo(numeros, rangos):
         return "funcion"
     return "archivo"
 
@@ -449,7 +481,7 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
     # Tachado antes de enviar, validar y clasificar, como en main(): una cita
     # de una línea con secreto llega al modelo tachada (revisión Codex,
     # mistral-review#3).
-    diff = mr.obtener_diff(caso["base"], caso["cabeza"])
+    diff, destino = _datos_caso(caso)
     rutas_textuales, lineas = _cambios_en_diff(diff)
     diff = mr.mask_secrets(diff)
     prefijo = diff[:mr.MAX_DIFF]
@@ -473,6 +505,7 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
     registro = {"estado": "invalida", "detalle": "", "solicitudes": 0,
                 "recortado": recortado, "hallazgos": [], "pendientes": [],
                 "rechazadas": [], "cortes_salida": 0,
+                "cita_directa_visible": _cita_directa_visible(prefijo, destino),
                 "cobertura": {"diff": cobertura_diff, "guia": cobertura_guia,
                               "contexto": cobertura_contexto}}
     try:
@@ -516,7 +549,6 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
         return registro
     if resultado is None:
         return registro
-    destino = objetivos(caso)
     registro["estado"] = "valida"
     for h in resultado[1]:
         donde = clasificar(h, prefijo, destino)
@@ -552,52 +584,61 @@ def resumir(casos, resultados, modelo, repeticiones, proveedor="mistral", ruta="
     positivos = [c for c in casos if c["tipo"] == "positivo" and not c.get("control")]
     controles = [c for c in casos if c.get("control")]
     negativos = [c for c in casos if c["tipo"] == "negativo"]
+    con_cita = {c["id"]: [r for r in resultados[c["id"]]
+                         if r["estado"] == "valida" and r.get("cita_directa_visible", True)]
+                for c in casos}
 
     def senala(r):
         return any(h["donde"] == "funcion" for h in r["hallazgos"])
 
-    if positivos:
-        alguna = sum(any(senala(r) for r in resultados[c["id"]]) for c in positivos)
-        ok = [r for c in positivos for r in resultados[c["id"]] if r["estado"] == "valida"]
-        partes.append("- **Defectos reales:** en %d de %d casos algún hallazgo señala la "
-                      "función que luego se corrigió; en %d de %d revisiones válidas."
-                      % (alguna, len(positivos), sum(senala(r) for r in ok), len(ok)))
-    if controles:
-        ok = [r for c in controles for r in resultados[c["id"]] if r["estado"] == "valida"]
-        partes.append("- **Control (defecto sintético evidente, fuera del recuento de "
-                      "arriba):** algún hallazgo señala la función en %d de %d revisiones "
-                      "válidas." % (sum(senala(r) for r in ok), len(ok)))
+    for grupo, titulo in ((positivos, "Localización de positivos"),
+                          (controles, "Localización del control (defecto sintético)")):
+        if not grupo:
+            continue
+        por_caso = [con_cita[c["id"]] for c in grupo if con_cita[c["id"]]]
+        if not por_caso:
+            partes.append("- **%s** · Sin revisiones válidas con cita directa visible." % titulo)
+            continue
+        revisiones = [r for lista in por_caso for r in lista]
+        partes.append("- **%s** · Algún hallazgo cita el objetivo en %d de %d casos y en "
+                      "%d de %d revisiones válidas con cita directa visible."
+                      % (titulo, sum(any(senala(r) for r in lista) for lista in por_caso),
+                         len(por_caso), sum(senala(r) for r in revisiones), len(revisiones)))
     if negativos:
         ok = [r for c in negativos for r in resultados[c["id"]] if r["estado"] == "valida"]
         total = sum(len(r["hallazgos"]) for r in ok)
-        repite = sum(h["donde"] != "fuera" for r in ok for h in r["hallazgos"])
-        partes.append("- **Commits con hallazgos falsos conocidos:** %d hallazgo(s) en %d "
-                      "revisiones válidas; %d en los mismos archivos que entonces."
+        repite = sum(h["donde"] != "fuera" for c in negativos for r in con_cita[c["id"]]
+                     for h in r["hallazgos"])
+        partes.append("- **Commits con hallazgos falsos conocidos** · %d hallazgo(s) en %d "
+                      "revisiones válidas, con %d en los mismos archivos que entonces."
                       % (total, len(ok), repite))
-    partes += ["", "Señalar la función no prueba acertar: etiqueta cada hallazgo de abajo.",
-               "", "| Caso | Tipo | Válidas | Señala la función | Hallazgos | Pendientes |",
+    partes += ["", "Para etiquetar un hallazgo, contrasta su escenario con el código.",
+               "", "| Caso | Tipo | Válidas | Cita el objetivo | Hallazgos | Pendientes |",
                "|---|---|---:|---:|---:|---:|"]
     for c in casos:
         rs = resultados[c["id"]]
         ok = [r for r in rs if r["estado"] == "valida"]
+        localizables = con_cita[c["id"]]
         partes.append("| `%s` | %s | %d/%d | %s | %d | %d |" % (
             c["id"], "control" if c.get("control") else c["tipo"], len(ok), len(rs),
-            "%d/%d" % (sum(senala(r) for r in ok), len(ok))
-            if c["tipo"] == "positivo" else "—",
+            "%d/%d" % (sum(senala(r) for r in localizables), len(localizables))
+            if c["tipo"] == "positivo" and localizables else "—",
             sum(len(r["hallazgos"]) for r in ok), sum(len(r["pendientes"]) for r in ok)))
     partes += ["", "### Hallazgos para etiquetar"]
     for c in casos:
         partes += ["", "**`%s`** (%s) — %s" % (c["id"], c["tipo"], mr._linea(c["defecto"], 300))]
         for i, r in enumerate(resultados[c["id"]], 1):
+            if not r.get("cita_directa_visible", True):
+                partes.append("- Repetición %d: sin cita directa visible." % i)
             if r["estado"] != "valida":
                 partes.append("- Repetición %d: %s%s." % (
                     i, r["estado"], " (%s)" % r["detalle"] if r["detalle"] else ""))
                 continue
             if not r["hallazgos"] and not r["pendientes"]:
                 partes.append("- Repetición %d: sin hallazgos ni pendientes." % i)
-            for h in r["hallazgos"]:
-                partes.append("- Repetición %d, hallazgo %s [%s] en %s: %s" % (
-                    i, h["severidad"], h["donde"], mr._codigo(h["archivo"], 120),
+            for numero, h in enumerate(r["hallazgos"], 1):
+                partes.append("- Repetición %d, hallazgo %d (%s) [%s] en %s: %s" % (
+                    i, numero, h["severidad"], h["donde"], mr._codigo(h["archivo"], 120),
                     mr._linea(h["problema"], 400)))
                 partes.append("  - Escenario: %s" % mr._linea(h["escenario"], 400))
             for p in r["pendientes"]:
@@ -608,17 +649,35 @@ def resumir(casos, resultados, modelo, repeticiones, proveedor="mistral", ruta="
 
 
 def listar(casos):
-    """Casos y objetivos, sin llamar a la API: comprueba que los commits existen."""
-    lineas = []
+    """Comprueba los casos y prepara su listado sin llamar a la API."""
+    lineas, errores = [], []
     for c in casos:
-        diff = mr.obtener_diff(c["base"], c["cabeza"])
+        try:
+            diff, destino = _datos_caso(c)
+        except CasoNoEvaluable as fallo:
+            errores.append("::error::Caso %s: %s" % (mr._linea(c["id"]), fallo))
+            continue
         lineas.append("%s [%s] diff=%d caracteres" % (c["id"], c["tipo"], len(diff)))
-        for archivo, rangos in sorted(objetivos(c).items()):
+        for archivo, rangos in sorted(destino.items()):
             lineas.append("  %s%s" % (archivo, "".join(
                 "\n    %d-%d %s" % r for r in rangos)))
-        if c["tipo"] == "positivo" and not objetivos(c):
-            lineas.append("  SIN OBJETIVO: el arreglo no toca código Python de la cabeza")
+        prefijo = mr.mask_secrets(diff)[:mr.MAX_DIFF]
+        if not _cita_directa_visible(prefijo, destino):
+            lineas.append("  sin cita directa visible en el diff preparado")
+    if errores:
+        raise CasoNoEvaluable("\n".join(errores))
     return "\n".join(lineas)
+
+
+def _comprobar_casos(casos, mostrar_listado=False):
+    try:
+        listado = listar(casos)
+    except CasoNoEvaluable as fallo:
+        print(fallo)
+        return False
+    if mostrar_listado:
+        print(listado)
+    return True
 
 
 def main(argv=None):
@@ -646,8 +705,7 @@ def main(argv=None):
             return 2
         casos = [c for c in casos if c["id"] in pedidos]
     if not args.ejecutar:
-        print(listar(casos))
-        return 0
+        return 0 if _comprobar_casos(casos, mostrar_listado=True) else 2
     # Mínimo seguro: una petición por revisión. Los reintentos se descuentan
     # del mismo tope en el transporte y pueden agotar la evaluación antes.
     if args.repeticiones < 1 or len(casos) * args.repeticiones > MAX_LLAMADAS:
@@ -686,6 +744,8 @@ def main(argv=None):
     else:
         print("::error::max_salida no válido: un entero de %d a %d."
               % (MAX_SALIDA_MINIMA, MAX_SALIDA_MAXIMA))
+        return 2
+    if not _comprobar_casos(casos):
         return 2
     resultados = {c["id"]: [] for c in casos}
     agotado = cancelada = False

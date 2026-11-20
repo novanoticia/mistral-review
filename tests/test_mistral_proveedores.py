@@ -386,6 +386,7 @@ class TestEvaluacionConProveedor(unittest.TestCase):
     def main(self, argv, variables, efecto=None):
         import tempfile
         from contextlib import redirect_stdout
+        from tests.test_mistral_eval import DIFF
         ev = self.ev
         base = dict(SIN_PROVEEDOR, MISTRAL_API_KEY="", OPENROUTER_API_KEY="")
         base.update(variables)
@@ -396,6 +397,8 @@ class TestEvaluacionConProveedor(unittest.TestCase):
             ruta = os.path.join(d, "r.json")
             with mock.patch.dict(os.environ, base), \
                     mock.patch.object(ev, "cargar_casos", return_value=[self.positivo]), \
+                    mock.patch.object(ev.mr, "obtener_diff", return_value=DIFF), \
+                    mock.patch.object(ev, "objetivos", return_value={"a.py": [(1, 2, "f")]}), \
                     mock.patch.object(ev, "revisar", return_value=registro,
                                       side_effect=efecto) as revisar, \
                     mock.patch.object(ev.mr, "escribir_resumen"), redirect_stdout(salida):
@@ -474,6 +477,7 @@ class TestEvaluacionConProveedor(unittest.TestCase):
                     mock.patch.object(ev.mr, "obtener_contexto", return_value=""), \
                     mock.patch.object(ev.mr, "leer_guia", return_value=(None, "")), \
                     mock.patch.object(ev, "git", return_value="asunto\n"), \
+                    mock.patch.object(ev, "objetivos", return_value={"a.py": [(1, 2, "f")]}), \
                     mock.patch.object(ev.mr, "llamar_mistral",
                                       side_effect=ev.mr.RespuestaIncompleta(causa)):
                 registro = ev.revisar(self.positivo, "z-ai/x", "k", proveedor="openrouter")
