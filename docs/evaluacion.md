@@ -89,14 +89,24 @@ en `.github/workflows/` y los casos en `.github/eval/casos.json` (plantilla:
   al terminar. Si el modelo no admite tanto, la API responde 400 sin cobrar.
 
 El resultado sale abreviado en el resumen de la ejecución. El artefacto
-`mistral-eval` guarda cada hallazgo entero (fragmento, problema, escenario y
-arreglo): es lo que hay que leer para etiquetar. Si una respuesta se rechaza por el
-formato (cita que no es una línea del diff, JSON incompleto…), el campo
-`rechazadas` de esa revisión guarda el motivo y sus primeros 20.000
-caracteres: así se sabe si el modelo vio el defecto aunque fallara el formato
-(GLM 5.3 Flash en el control, ejecución #7). Ese texto solo va al artefacto,
-nunca al resumen. Usa el secreto `MISTRAL_API_KEY` y la variable
-`MISTRAL_MODEL` del repositorio, como el revisor; con OpenRouter, el secreto
+`mistral-eval` conserva el fragmento, el problema, el escenario y el arreglo
+de cada hallazgo para poder etiquetarlo. Tras validar y clasificar la
+respuesta, se aplica el filtro de secretos a los textos guardados de
+hallazgos y pendientes. El resumen y el registro de Actions usan esos mismos
+textos filtrados. El filtro reconoce patrones de asignación habituales y
+puede dejar pasar secretos en otros formatos.
+
+Cada entrada de `rechazadas` conserva el motivo (`detalle`) y la longitud
+original de la respuesta (`caracteres`). Si la respuesta se puede leer como
+JSON y contiene campos reconocidos de resumen, hallazgos o comprobaciones,
+el campo opcional `texto` guarda una vista de esos campos solo en el
+artefacto. Se filtran las cadenas antes de convertir la vista a texto y
+limitarla a 20.000 caracteres. Esto permite examinar si el modelo apuntó al
+defecto aunque fallara el formato, como en el control de la ejecución #7.
+Si el JSON está mal formado, se guardan el motivo y la longitud.
+
+La evaluación usa el secreto `MISTRAL_API_KEY` y la variable
+`MISTRAL_MODEL` del repositorio, igual que el revisor. Con OpenRouter usa el secreto
 `OPENROUTER_API_KEY` y las variables `MISTRAL_PROVIDER` y, opcional,
 `OPENROUTER_PROVIDER` ([README](../README.md#usar-openrouter-opcional)).
 
