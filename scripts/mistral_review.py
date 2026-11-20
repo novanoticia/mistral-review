@@ -547,8 +547,6 @@ def _bloque_auxiliar(ruta, texto, lineas, nuevas, visibles, rangos, limite):
         if any(inicio <= hasta and desde <= fin for desde, hasta, _ in rangos):
             continue
         fuente = lineas[inicio - 1:fin]
-        if sum(len(linea) + 1 for linea in fuente) > limite:
-            continue
         bloque = ("\n\n## Contexto auxiliar de %s (cabeza, fuera del diff visible)"
                   "\n```python\n# líneas %d-%d · %s\n%s\n```"
                   % (ruta, inicio, fin, nodo.name, "\n".join(fuente)))

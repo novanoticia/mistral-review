@@ -263,6 +263,25 @@ class TestContexto(unittest.TestCase):
         self.assertEqual(self.contexto(diff, fuentes, auxiliares_locales=True),
                          self.contexto(diff, fuentes))
 
+    def test_admite_auxiliar_largo_si_cabe_despues_de_tachar(self):
+        valor_ficticio = "x" * 1_500
+        fuente = self.AUXILIAR.replace("    if valor is None:",
+                                       '    token = "%s"\n    if valor is None:' % valor_ficticio)
+        diff = self.diff_auxiliar(fuente)
+        fuentes = {"a.py": fuente}
+        usual = self.contexto(diff, fuentes)
+        cobertura = {}
+
+        extendido = self.contexto(diff, fuentes, auxiliares_locales=True, cobertura=cobertura)
+
+        self.assertTrue(extendido.startswith(usual + "\n\n"))
+        bloque = extendido[len(usual):]
+        self.assertIn('    token = "***"', bloque)
+        self.assertIn("    return str(valor)", bloque)
+        self.assertNotIn(valor_ficticio, extendido)
+        self.assertLessEqual(len(bloque), mr.MAX_AUXILIAR)
+        self.assertEqual(cobertura["caracteres_auxiliares"], len(bloque))
+
     def test_mide_el_limite_auxiliar_despues_de_tachar(self):
         fuente = self.AUXILIAR.replace("    if valor is None:\n", "    token=0\n" * 65
                                         + "    if valor is None:\n")
