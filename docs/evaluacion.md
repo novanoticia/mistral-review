@@ -100,6 +100,13 @@ nunca al resumen. Usa el secreto `MISTRAL_API_KEY` y la variable
 `OPENROUTER_API_KEY` y las variables `MISTRAL_PROVIDER` y, opcional,
 `OPENROUTER_PROVIDER` ([README](../README.md#usar-openrouter-opcional)).
 
+Si la API indica `length`, se agotó el margen de salida y se puede hacer un
+segundo intento. El campo `cortes_salida` cuenta esos cortes aunque la siguiente
+respuesta sea válida. Si el último intento termina por `length`, la revisión
+queda `cortada`. Un cuerpo HTTP que no sea JSON o un contenido vacío se registra
+como `error` con el detalle `formato_respuesta`. Una respuesta textual que el
+validador rechaza queda `invalida` si se agotan los intentos.
+
 **Comparar proveedores y modelos.** Los casos y los criterios son los mismos
 para cualquier configuración. El encabezado del informe y el JSON del
 artefacto (`proveedor`, `ruta`, `modelo`, `esfuerzo`, `max_salida`) dicen
@@ -111,8 +118,9 @@ distinto y la comparación pierde sentido. Que una configuración encuentre más
 defectos en una ejecución no prueba que sea mejor: hacen falta varias
 repeticiones y etiquetar los hallazgos a mano.
 
-**Coste.** Cada revisión es una solicitud (dos si la respuesta llega mal
-formada). Con `mistral-large-latest` y razonamiento, del orden de 10.000
+**Coste.** Cada revisión admite hasta dos intentos de respuesta. Se usa el
+segundo si la primera se corta por `length` o el validador la rechaza. Con
+`mistral-large-latest` y razonamiento, del orden de 10.000
 tokens de salida más la entrada (guía, contexto y diff: decenas de miles de
 tokens). Doce casos a dos repeticiones son al menos 24 peticiones. Hay un
 tope de 80 **peticiones HTTP reales** por ejecución, contadas en el
@@ -279,3 +287,5 @@ Etiquetado a mano:
 **Conclusión:** con una repetición no es concluyente, pero no hay nada a
 favor de cambiar: ve lo mismo que GLM 5.3 Flash, con más ruido y peor
 formato, a un coste parecido. El revisor sigue con `zai-glm-5-3-flash`.
+
+*Texto elaborado con asistencia de IA; requiere revisión humana.*

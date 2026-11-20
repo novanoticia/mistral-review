@@ -268,13 +268,62 @@ class TestRevisar(unittest.TestCase):
         for campo in ("problema", "escenario", "arreglo", "fragmento"):
             self.assertEqual(registro["hallazgos"][0][campo], largo[campo])
 
-    def test_corte_y_error_de_api_se_registran_sin_reintentar(self):
-        registro, api = self.revisar([mr.RespuestaIncompleta("length")])
+    @staticmethod
+    def respuesta_http(motivo, contenido):
+        datos = {"choices": [{"finish_reason": motivo, "message": {"content": contenido}}]}
+        return io.BytesIO(json.dumps(datos).encode("utf-8"))
+
+    def test_reintenta_length_y_conserva_el_recuento_de_cortes(self):
+        valido = json.dumps({"resumen": "R", "hallazgos": [HALLAZGO],
+                             "comprobaciones": COMPROBACIONES})
+        for segundo_motivo, contenido, estado, detalle, cortes in (
+                ("stop", valido, "valida", "", 1),
+                ("length", "{", "cortada", "length", 2)):
+            with self.subTest(segundo_motivo=segundo_motivo):
+                respuestas = [self.respuesta_http("length", "{"),
+                              self.respuesta_http(segundo_motivo, contenido)]
+                with mock.patch.object(mr.urllib.request, "urlopen", side_effect=respuestas) as abrir:
+                    registro, _ = self.revisar(mr.llamar_mistral)
+                self.assertEqual((registro["estado"], registro["detalle"]), (estado, detalle))
+                self.assertEqual(abrir.call_count, 2)
+                self.assertEqual(registro["cortes_salida"], cortes)
+                self.assertEqual(registro["rechazadas"], [])
+                informe = ev.resumir([POSITIVO], {"p": [registro]}, "m", 1)
+                self.assertIn("**Respuestas cortadas por límite de salida:** %d." % cortes, informe)
+
+    def test_el_corte_comparte_el_tope_con_un_rechazo_del_validador(self):
+        registro, api = self.revisar(["no json", mr.RespuestaIncompleta("length")])
         self.assertEqual((registro["estado"], registro["detalle"]), ("cortada", "length"))
-        api.assert_called_once()
+        self.assertEqual(api.call_count, 2)
+        self.assertEqual(registro["cortes_salida"], 1)
+        self.assertEqual([r["texto"] for r in registro["rechazadas"]], ["no json"])
+
+    def test_el_reintento_por_corte_respeta_el_presupuesto_http(self):
+        with mock.patch.object(mr.urllib.request, "urlopen",
+                               return_value=self.respuesta_http("length", "{")) as abrir, \
+                ev.Presupuesto(1) as presupuesto:
+            with self.assertRaises(ev.PresupuestoAgotado):
+                self.revisar(mr.llamar_mistral)
+        self.assertEqual(presupuesto.usadas, 1)
+        abrir.assert_called_once()
+
+    def test_respuesta_http_no_json_o_vacia_es_error_de_formato(self):
+        for nombre, respuesta in (("no JSON", io.BytesIO(b"cuerpo no JSON")),
+                                  ("vacia", self.respuesta_http("stop", " "))):
+            with self.subTest(nombre=nombre), \
+                    mock.patch.object(mr.urllib.request, "urlopen", return_value=respuesta) as abrir:
+                registro, _ = self.revisar(mr.llamar_mistral)
+                self.assertEqual((registro["estado"], registro["detalle"]),
+                                 ("error", "formato_respuesta"))
+                self.assertEqual(registro["cortes_salida"], 0)
+                self.assertEqual(registro["rechazadas"], [])
+                abrir.assert_called_once()
+
+    def test_error_http_se_registra_sin_reintentar_la_respuesta(self):
         fallo = mr.urllib.error.HTTPError(mr.API, 500, "e", {}, io.BytesIO(b""))
-        registro, _ = self.revisar([fallo])
+        registro, api = self.revisar([fallo])
         self.assertEqual((registro["estado"], registro["detalle"]), ("error", "HTTP 500"))
+        api.assert_called_once()
 
 
 class TestPresupuesto(unittest.TestCase):
