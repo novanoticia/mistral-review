@@ -202,9 +202,11 @@ HALLAZGO = {"severidad": "media", "archivo": "a.py", "fragmento": "y = x + 1",
 
 
 class TestRevisar(unittest.TestCase):
-    def revisar(self, respuestas, destino=None, diff=DIFF):
+    def revisar(self, respuestas, destino=None, diff=DIFF, rutas=None):
+        if rutas is None:
+            rutas = {"a.py"}
         with mock.patch.object(mr, "obtener_diff", return_value=diff), \
-                mock.patch.object(mr, "obtener_rutas_diff", return_value={"a.py"}), \
+                mock.patch.object(mr, "obtener_rutas_diff", return_value=rutas), \
                 mock.patch.object(mr, "obtener_contexto", return_value=""), \
                 mock.patch.object(mr, "leer_guia", return_value=(None, "")), \
                 mock.patch.object(ev, "git", return_value="asunto\n"), \
@@ -239,6 +241,29 @@ class TestRevisar(unittest.TestCase):
         registro, api = self.revisar([texto], diff=diff)
         self.assertEqual((registro["estado"], api.call_count), ("valida", 1))
         self.assertNotIn(valor, api.call_args.args[0][1]["content"])
+
+    def test_cobertura_del_diff_sin_cambiar_los_mensajes_ni_la_validacion(self):
+        borrado = ("diff --git a/b.py b/b.py\n--- a/b.py\n+++ /dev/null\n"
+                   "@@ -1 +0,0 @@\n-valor_borrado = True\n")
+        binario = ("diff --git a/c.bin b/c.bin\n"
+                   "Binary files a/c.bin and b/c.bin differ\n")
+        diff = DIFF + borrado + binario
+        rutas = {"a.py", "b.py", "c.bin"}
+        texto = json.dumps({"resumen": "R", "hallazgos": [HALLAZGO],
+                            "comprobaciones": COMPROBACIONES})
+        for limite, rutas_visibles, lineas_visibles, recortado in (
+                (len(diff), 2, 2, False), (len(DIFF + borrado) - 1, 1, 1, True)):
+            with self.subTest(limite=limite), mock.patch.object(mr, "MAX_DIFF", limite):
+                mensajes, _ = mr.construir_mensajes("asunto", None, diff, (None, ""), "")
+                registro, api = self.revisar([texto], diff=diff, rutas=rutas)
+                api.assert_called_once_with(mensajes, "m", "clave", proveedor="mistral", ruta="")
+                self.assertEqual(registro["estado"], "valida")
+                self.assertEqual(registro["hallazgos"], [dict(HALLAZGO, donde="funcion")])
+                self.assertEqual(registro["cobertura"]["diff"], {
+                    "rutas_disponibles": 3, "rutas_sin_cambios_textuales": 1,
+                    "rutas_con_cambios": 2, "rutas_con_cambios_visibles": rutas_visibles,
+                    "lineas_de_cambio": 2, "lineas_de_cambio_visibles": lineas_visibles,
+                    "recortado": recortado, "linea_final_incompleta": recortado})
 
     def test_respuesta_mal_formada_se_pide_dos_veces_y_queda_invalida(self):
         registro, api = self.revisar(["no json", "no json", "no json"])
@@ -442,6 +467,64 @@ class TestPresupuesto(unittest.TestCase):
         self.assertIn("Evaluación incompleta", salida.getvalue())
 
 
+class TestProcedencia(unittest.TestCase):
+    @staticmethod
+    def crear_repo(ruta, archivos):
+        os.makedirs(ruta)
+
+        def git(*args):
+            return subprocess.run(
+                ("git", "-C", ruta) + args, check=True, capture_output=True,
+                text=True).stdout.strip()
+
+        git("init", "-q")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        for archivo in archivos:
+            destino = os.path.join(ruta, archivo)
+            os.makedirs(os.path.dirname(destino), exist_ok=True)
+            with open(destino, "w", encoding="utf-8") as fh:
+                fh.write(archivo + "\n")
+        git("add", "--", *archivos)
+        git("-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+            "commit", "-qm", "fixture")
+        return git("rev-parse", "HEAD")
+
+    def test_distingue_checkouts_y_cambios_versionados(self):
+        archivos = ("scripts/mistral_eval.py", "scripts/mistral_review.py")
+        with tempfile.TemporaryDirectory() as d:
+            evaluado = os.path.join(d, "evaluado")
+            revisor = os.path.join(evaluado, ".mistral-review")
+            sha_evaluado = self.crear_repo(evaluado, ("README.md",))
+            sha_revisor = self.crear_repo(revisor, archivos)
+            with mock.patch.object(ev, "_AQUI", os.path.join(revisor, "scripts")), \
+                    mock.patch.object(ev.os, "getcwd", return_value=evaluado):
+                self.assertEqual(ev._procedencia(), {
+                    "revisor": {"commit": sha_revisor, "cambios_locales": False},
+                    "evaluado": {"commit": sha_evaluado, "cambios_locales": False}})
+                with open(os.path.join(revisor, archivos[1]), "a", encoding="utf-8") as fh:
+                    fh.write("cambio local\n")
+                self.assertTrue(ev._procedencia()["revisor"]["cambios_locales"])
+                self.assertFalse(ev._procedencia()["evaluado"]["cambios_locales"])
+                with open(os.path.join(evaluado, "README.md"), "a", encoding="utf-8") as fh:
+                    fh.write("cambio local\n")
+                self.assertTrue(ev._procedencia()["evaluado"]["cambios_locales"])
+
+    def test_no_atribuye_una_copia_sin_seguimiento_al_repo_que_la_contiene(self):
+        with tempfile.TemporaryDirectory() as d:
+            evaluado = os.path.join(d, "evaluado")
+            sha_evaluado = self.crear_repo(evaluado, ("scripts/otro.py",))
+            scripts = os.path.join(evaluado, "scripts")
+            for nombre in ("mistral_eval.py", "mistral_review.py"):
+                with open(os.path.join(scripts, nombre), "w", encoding="utf-8") as fh:
+                    fh.write("# copia sin seguimiento\n")
+            with mock.patch.object(ev, "_AQUI", scripts), \
+                    mock.patch.object(ev.os, "getcwd", return_value=evaluado):
+                self.assertEqual(ev._procedencia(), {
+                    "revisor": {"commit": None, "cambios_locales": None},
+                    "evaluado": {"commit": sha_evaluado, "cambios_locales": False}})
+
+
 class TestGuardadoParcial(unittest.TestCase):
     REGISTRO = {"estado": "valida", "detalle": "", "solicitudes": 0,
                 "recortado": False, "hallazgos": [], "pendientes": []}
@@ -472,6 +555,20 @@ class TestGuardadoParcial(unittest.TestCase):
                 final = json.load(fh)
             sobrantes = os.listdir(d)
         return codigo, vistos, final, salida.getvalue(), sobrantes
+
+    def test_guarda_procedencia_y_duracion_en_parcial_y_final(self):
+        procedencia = {"revisor": {"commit": SHA, "cambios_locales": False},
+                       "evaluado": {"commit": "b" * 40, "cambios_locales": True}}
+        with mock.patch.object(ev, "_procedencia", return_value=procedencia, create=True), \
+                mock.patch.object(ev, "monotonic_ns", create=True,
+                                  side_effect=[0, 24_999_999, 30_000_000, 51_000_000]):
+            codigo, vistos, final, _, _ = self.ejecutar([self.REGISTRO, self.REGISTRO])
+        self.assertEqual(codigo, 0)
+        self.assertEqual(vistos[0]["procedencia"], procedencia)
+        self.assertEqual(final["procedencia"], procedencia)
+        self.assertEqual(vistos[0]["resultados"]["p"][0]["duracion_ms"], 24)
+        self.assertEqual(final["resultados"]["p"][0]["duracion_ms"], 24)
+        self.assertEqual(final["resultados"]["n"][0]["duracion_ms"], 21)
 
     def test_el_json_se_guarda_tras_cada_revision(self):
         codigo, vistos, final, _, sobrantes = self.ejecutar(
@@ -540,8 +637,12 @@ class TestGuardadoParcial(unittest.TestCase):
         estados = [json.loads(texto) for texto in guardados]
         self.assertEqual([datos["en_curso"] for datos in estados], [True, True, False])
         self.assertEqual([datos["peticiones"] for datos in estados], [2, 3, 3])
+        for datos in estados:
+            for revision in datos["resultados"]["p"]:
+                self.assertEqual(revision["cobertura"]["diff"]["lineas_de_cambio_visibles"], 1)
         invalida, valida = estados[-1]["resultados"]["p"]
         self.assertEqual((invalida["estado"], valida["estado"]), ("invalida", "valida"))
+        self.assertEqual((invalida["solicitudes"], valida["solicitudes"]), (2, 1))
         primero, segundo = invalida["rechazadas"]
         self.assertEqual(primero, {"detalle": "json_invalido", "caracteres": len(frase)})
         self.assertEqual(segundo["caracteres"], len(rechazado))

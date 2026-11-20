@@ -39,6 +39,7 @@ import re
 import subprocess
 import sys
 import urllib.error
+from time import monotonic_ns
 
 _AQUI = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location(
@@ -243,6 +244,33 @@ def git(*args):
                           text=True, encoding="utf-8", errors="replace").stdout
 
 
+def _procedencia_checkout(directorio, archivos=()):
+    sin_procedencia = {"commit": None, "cambios_locales": None}
+    try:
+        raiz = git("-C", directorio, "rev-parse", "--show-toplevel").removesuffix("\n")
+        commit = git("-C", raiz, "rev-parse", "--verify", "HEAD^{commit}").strip()
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+            return sin_procedencia
+        if archivos:
+            # Una copia suelta puede encontrarse dentro del checkout evaluado.
+            if os.path.realpath(raiz) != os.path.realpath(directorio):
+                return sin_procedencia
+            versionados = git("-C", raiz, "ls-tree", "--name-only", commit, "--", *archivos)
+            if set(versionados.splitlines()) != set(archivos):
+                return sin_procedencia
+        cambios = git("--no-optional-locks", "-C", raiz, "status", "--porcelain=v1",
+                      "--untracked-files=no", "--", *archivos)
+    except (OSError, subprocess.CalledProcessError):
+        return sin_procedencia
+    return {"commit": commit, "cambios_locales": bool(cambios)}
+
+
+def _procedencia():
+    scripts = ("scripts/mistral_eval.py", "scripts/mistral_review.py")
+    return {"revisor": _procedencia_checkout(os.path.dirname(_AQUI), scripts),
+            "evaluado": _procedencia_checkout(os.getcwd())}
+
+
 def cargar_casos(ruta):
     """Lee y valida el fichero de casos; un caso mal escrito no se evalúa a medias."""
     with open(ruta, encoding="utf-8") as fh:
@@ -405,20 +433,48 @@ def _vista_rechazada(texto):
     return None
 
 
+def _cambios_en_diff(diff):
+    """Rutas y número de líneas completas añadidas o eliminadas."""
+    rutas = set()
+    lineas = 0
+    for ruta, linea, _ in mr._lineas_de_hunks(diff):
+        if linea.startswith(("+", "-")):
+            rutas.add(ruta)
+            lineas += 1
+    return rutas, lineas
+
+
 def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
     """Evalúa un caso y registra su resultado junto con los intentos de respuesta."""
     # Tachado antes de enviar, validar y clasificar, como en main(): una cita
     # de una línea con secreto llega al modelo tachada (revisión Codex,
     # mistral-review#3).
-    diff = mr.mask_secrets(mr.obtener_diff(caso["base"], caso["cabeza"]))
+    diff = mr.obtener_diff(caso["base"], caso["cabeza"])
+    rutas_textuales, lineas = _cambios_en_diff(diff)
+    diff = mr.mask_secrets(diff)
+    prefijo = diff[:mr.MAX_DIFF]
     titulo = git("log", "-1", "--format=%s", caso["cabeza"]).strip()
-    mensajes, recortado = mr.construir_mensajes(
-        titulo, None, diff, mr.leer_guia(),
-        mr.obtener_contexto(diff[:mr.MAX_DIFF], caso["cabeza"]))
+    cobertura_guia, cobertura_contexto = {}, {}
+    guia = mr.leer_guia(cobertura=cobertura_guia)
+    contexto = mr.obtener_contexto(prefijo, caso["cabeza"], cobertura=cobertura_contexto)
+    mensajes, recortado = mr.construir_mensajes(titulo, None, diff, guia, contexto)
     rutas = mr.obtener_rutas_diff(caso["base"], caso["cabeza"])
+    rutas_visibles, lineas_visibles = _cambios_en_diff(prefijo)
+    cobertura_diff = {
+        "rutas_disponibles": len(rutas),
+        "rutas_sin_cambios_textuales": len(rutas - rutas_textuales),
+        "rutas_con_cambios": len(rutas_textuales),
+        "rutas_con_cambios_visibles": len(rutas_visibles),
+        "lineas_de_cambio": lineas,
+        "lineas_de_cambio_visibles": lineas_visibles,
+        "recortado": recortado,
+        "linea_final_incompleta": recortado and bool(prefijo) and not prefijo.endswith("\n"),
+    }
     registro = {"estado": "invalida", "detalle": "", "solicitudes": 0,
                 "recortado": recortado, "hallazgos": [], "pendientes": [],
-                "rechazadas": [], "cortes_salida": 0}
+                "rechazadas": [], "cortes_salida": 0,
+                "cobertura": {"diff": cobertura_diff, "guia": cobertura_guia,
+                              "contexto": cobertura_contexto}}
     try:
         for solicitud in range(1, mr.INTENTOS_RESPUESTA + 1):
             registro["solicitudes"] += 1
@@ -432,7 +488,7 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
                         continue
                 raise
             diagnostico = []
-            resultado = mr.interpretar(texto, diff[:mr.MAX_DIFF],
+            resultado = mr.interpretar(texto, prefijo,
                 exigir_comprobaciones=True, rutas_comprobaciones=rutas,
                 diagnostico=diagnostico)
             registro["detalle"] = ", ".join(diagnostico)
@@ -463,7 +519,7 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
     destino = objetivos(caso)
     registro["estado"] = "valida"
     for h in resultado[1]:
-        donde = clasificar(h, diff[:mr.MAX_DIFF], destino)
+        donde = clasificar(h, prefijo, destino)
         registro["hallazgos"].append(dict(_campos_filtrados(h, CAMPOS_HALLAZGO), donde=donde))
     for c in json.loads(texto)["comprobaciones"]:
         if c["estado"] == "pendiente":
@@ -633,13 +689,14 @@ def main(argv=None):
         return 2
     resultados = {c["id"]: [] for c in casos}
     agotado = cancelada = False
+    procedencia = _procedencia()
 
     def datos(en_curso):
         return {"proveedor": proveedor, "ruta": ruta,
                 "modelo": modelo, "repeticiones": args.repeticiones,
                 "esfuerzo": esfuerzo, "max_salida": max_salida, "en_curso": en_curso,
                 "peticiones": presupuesto.usadas, "incompleta": agotado or cancelada,
-                "cancelada": cancelada,
+                "cancelada": cancelada, "procedencia": procedencia,
                 "tokens": {"entrada": presupuesto.entrada,
                            "salida": presupuesto.salida,
                            "respuestas": presupuesto.respondidas,
@@ -659,7 +716,9 @@ def main(argv=None):
             for c in casos:
                 for n in range(args.repeticiones):
                     antes = presupuesto.usadas
+                    inicio = monotonic_ns()
                     registro = revisar(c, modelo, clave, proveedor=proveedor, ruta=ruta)
+                    registro["duracion_ms"] = (monotonic_ns() - inicio) // 1_000_000
                     registro["solicitudes"] = presupuesto.usadas - antes
                     resultados[c["id"]].append(registro)
                     # flush: en el log de Actions se ve el avance caso a caso.
