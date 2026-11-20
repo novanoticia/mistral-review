@@ -112,10 +112,14 @@ class TestObjetivos(unittest.TestCase):
             viejo = os.getcwd()
             try:
                 os.chdir(d)
-                destino = ev.objetivos(caso)
+                with mock.patch.dict(os.environ, {"MISTRAL_EXCLUIDOS": ""}):
+                    destino = ev.objetivos(caso)
+                with mock.patch.dict(os.environ, {"MISTRAL_EXCLUIDOS": "*.py"}):
+                    destino_excluido = ev.objetivos(caso)
             finally:
                 os.chdir(viejo)
         self.assertEqual(destino, {"a.py": [(5, 7, "rota")]})   # ni tests ni ignorados
+        self.assertEqual(destino_excluido, {})
 
     def test_negativo_apunta_a_sus_archivos(self):
         self.assertEqual(ev.objetivos(NEGATIVO), {"a.py": []})
@@ -184,6 +188,15 @@ class TestClasificar(unittest.TestCase):
         self.assertTrue(mr.cita_en(hallazgo["fragmento"], mr.indice_diff(diff)["a.py"]))
         self.assertEqual(ev.clasificar(hallazgo, diff, {"a.py": [(1, 2, "f")]}), "funcion")
 
+    def test_la_cita_directa_usa_lineas_completas_y_vecinas_del_borrado(self):
+        diff = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -4 +3,0 @@\n-    return x\n"
+        destino = {"a.py": [(2, 2, "f")]}
+        self.assertTrue(ev._cita_directa_visible(diff, destino))
+        self.assertFalse(ev._cita_directa_visible(diff[:-1], destino))
+        self.assertFalse(ev._cita_directa_visible(diff.replace("return x", ")"), destino))
+        self.assertTrue(ev._cita_directa_visible(diff, {"a.py": []}))
+        self.assertFalse(ev._cita_directa_visible(diff, {"b.py": []}))
+
     def test_funcion_archivo_o_fuera(self):
         def h(archivo, fragmento):
             return {"archivo": archivo, "fragmento": fragmento}
@@ -202,18 +215,19 @@ HALLAZGO = {"severidad": "media", "archivo": "a.py", "fragmento": "y = x + 1",
 
 
 class TestRevisar(unittest.TestCase):
-    def revisar(self, respuestas, destino=None, diff=DIFF, rutas=None):
+    def revisar(self, respuestas, destino=None, diff=DIFF, rutas=None, caso=POSITIVO):
         if rutas is None:
             rutas = {"a.py"}
+        if destino is None:
+            destino = {"a.py": [(1, 2, "f")]}
         with mock.patch.object(mr, "obtener_diff", return_value=diff), \
                 mock.patch.object(mr, "obtener_rutas_diff", return_value=rutas), \
                 mock.patch.object(mr, "obtener_contexto", return_value=""), \
                 mock.patch.object(mr, "leer_guia", return_value=(None, "")), \
                 mock.patch.object(ev, "git", return_value="asunto\n"), \
-                mock.patch.object(ev, "objetivos",
-                                  return_value=destino or {"a.py": [(1, 2, "f")]}), \
+                mock.patch.object(ev, "objetivos", return_value=destino), \
                 mock.patch.object(mr, "llamar_mistral", side_effect=respuestas) as api:
-            return ev.revisar(POSITIVO, "m", "clave"), api
+            return ev.revisar(caso, "m", "clave"), api
 
     def test_revision_valida_clasifica_hallazgos_y_pendientes(self):
         texto = json.dumps({"resumen": "R", "hallazgos": [HALLAZGO],
@@ -264,6 +278,26 @@ class TestRevisar(unittest.TestCase):
                     "rutas_con_cambios": 2, "rutas_con_cambios_visibles": rutas_visibles,
                     "lineas_de_cambio": 2, "lineas_de_cambio_visibles": lineas_visibles,
                     "recortado": recortado, "linea_final_incompleta": recortado})
+
+    def test_objetivo_fuera_del_recorte_conserva_la_revision_y_el_hallazgo(self):
+        referencia = ("diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n"
+                      "@@ -1 +1 @@\n-x = 0\n+x = 1\n")
+        diff = DIFF + referencia
+        caso = dict(POSITIVO, defecto="marca del defecto conocido", arreglo="b" * 40)
+        texto = json.dumps({"resumen": "R", "hallazgos": [HALLAZGO],
+                            "comprobaciones": COMPROBACIONES})
+        corte = len(DIFF) + referencia.index("\n+x = 1")
+        for limite, visible in ((len(diff), True), (corte, False)):
+            with self.subTest(visible=visible), mock.patch.object(mr, "MAX_DIFF", limite):
+                registro, api = self.revisar([texto], destino={"b.py": [(1, 1, "")]},
+                                             diff=diff, rutas={"a.py", "b.py"}, caso=caso)
+                api.assert_called_once()
+                self.assertEqual(registro["estado"], "valida")
+                self.assertEqual(registro["hallazgos"], [dict(HALLAZGO, donde="fuera")])
+                self.assertEqual(registro["cita_directa_visible"], visible)
+                mensajes = api.call_args.args[0]
+                self.assertNotIn(caso["defecto"], json.dumps(mensajes))
+                self.assertNotIn(caso["arreglo"], json.dumps(mensajes))
 
     def test_respuesta_mal_formada_se_pide_dos_veces_y_queda_invalida(self):
         registro, api = self.revisar(["no json", "no json", "no json"])
@@ -453,6 +487,8 @@ class TestPresupuesto(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.dict(os.environ, {"MISTRAL_API_KEY": "clave"}), \
                 mock.patch.object(ev, "cargar_casos", return_value=[POSITIVO, NEGATIVO]), \
+                mock.patch.object(mr, "obtener_diff", return_value=DIFF), \
+                mock.patch.object(ev, "objetivos", return_value={"a.py": [(1, 2, "f")]}), \
                 mock.patch.object(ev, "revisar",
                                   side_effect=[registro, ev.PresupuestoAgotado()]), \
                 mock.patch.object(mr, "escribir_resumen"), redirect_stdout(salida):
@@ -548,6 +584,8 @@ class TestGuardadoParcial(unittest.TestCase):
             with mock.patch.dict(os.environ, {"MISTRAL_API_KEY": "clave"}), \
                     mock.patch.object(ev, "cargar_casos",
                                       return_value=[POSITIVO, NEGATIVO]), \
+                    mock.patch.object(mr, "obtener_diff", return_value=DIFF), \
+                    mock.patch.object(ev, "objetivos", return_value={"a.py": [(1, 2, "f")]}), \
                     mock.patch.object(ev, "revisar", side_effect=revisar), \
                     mock.patch.object(mr, "escribir_resumen"), redirect_stdout(salida):
                 codigo = ev.main(["--ejecutar", "--repeticiones", "1", "--salida", ruta])
@@ -674,11 +712,11 @@ class TestInforme(unittest.TestCase):
         self.assertIn("**Revisiones válidas:** 3 de 4 (cortada: 1)", informe)
         self.assertIn("en 1 de 1 casos", informe)
         self.assertIn("en 1 de 1 revisiones válidas", informe)
-        self.assertIn("1 hallazgo(s) en 2 revisiones válidas; 1 en los mismos archivos",
+        self.assertIn("1 hallazgo(s) en 2 revisiones válidas, con 1 en los mismos archivos",
                       informe)
         self.assertIn("| `p` | positivo | 1/2 | 1/1 | 1 | 0 |", informe)
         self.assertIn("| `n` | negativo | 2/2 | — | 1 | 0 |", informe)
-        self.assertIn("hallazgo alta [funcion] en `a.py`: texto del hallazgo", informe)
+        self.assertIn("hallazgo 1 (alta) [funcion] en `a.py`: texto del hallazgo", informe)
         self.assertIn("  - Escenario: entrada concreta", informe)
         self.assertIn("Repetición 2: cortada (length).", informe)
         self.assertIn("Repetición 2: sin hallazgos ni pendientes.", informe)
@@ -693,11 +731,59 @@ class TestInforme(unittest.TestCase):
         control = dict(POSITIVO, id="c", control=True)
         informe = ev.resumir([POSITIVO, control], {"p": [r("fuera")], "c": [r("funcion")]},
                              "m", 1)
-        # El acierto en el control no sube el recuento de defectos reales.
+        # La coincidencia del control se cuenta por separado.
         self.assertIn("en 0 de 1 casos", informe)
-        self.assertIn("**Control (defecto sintético evidente", informe)
-        self.assertIn("señala la función en 1 de 1 revisiones válidas", informe)
+        self.assertIn("**Localización del control", informe)
+        self.assertIn("en 1 de 1 casos y en 1 de 1 revisiones válidas con cita directa visible", informe)
         self.assertIn("| `c` | control | 1/1 | 1/1 | 1 | 0 |", informe)
+
+    def test_localizacion_exige_revision_valida_y_cita_directa_visible(self):
+        def r(visible, donde, estado="valida"):
+            return {"estado": estado, "detalle": "conexión" if estado == "error" else "",
+                    "cita_directa_visible": visible, "pendientes": [],
+                    "hallazgos": [dict(HALLAZGO, donde=donde)] if donde else []}
+
+        fuera_del_diff = dict(POSITIVO, id="p-oculto")
+        con_error = dict(POSITIVO, id="p-error")
+        control = dict(POSITIVO, id="c", control=True)
+        control_sin_cita = dict(control, id="c-oculto")
+        resultados = {
+            "p": [r(True, "fuera"), r(False, "funcion")],
+            "p-oculto": [r(False, "funcion")],
+            "p-error": [r(True, None, "error")],
+            "c": [r(True, "funcion"), r(False, "funcion")],
+            "c-oculto": [r(False, None, "error")],
+            "n": [r(True, "archivo"), r(False, "archivo")],
+        }
+        informe = ev.resumir([POSITIVO, fuera_del_diff, con_error, control,
+                              control_sin_cita, NEGATIVO], resultados, "m", 2)
+        self.assertIn("**Revisiones válidas:** 7 de 9 (error: 2)", informe)
+        self.assertIn("**Localización de positivos** · Algún hallazgo cita el objetivo "
+                      "en 0 de 1 casos y en 0 de 1 revisiones válidas con cita directa visible.",
+                      informe)
+        self.assertIn("**Localización del control (defecto sintético)** · Algún hallazgo "
+                      "cita el objetivo en 1 de 1 casos y en 1 de 1 revisiones válidas "
+                      "con cita directa visible.", informe)
+        self.assertIn("2 hallazgo(s) en 2 revisiones válidas, con 1 en los mismos archivos", informe)
+        self.assertIn("| `p` | positivo | 2/2 | 0/1 | 2 | 0 |", informe)
+        self.assertIn("| `p-oculto` | positivo | 1/1 | — | 1 | 0 |", informe)
+        self.assertIn("| `c` | control | 2/2 | 1/1 | 2 | 0 |", informe)
+        self.assertIn("Repetición 2: sin cita directa visible.", informe)
+        self.assertIn("Repetición 1: error (conexión).", informe)
+
+    def test_numera_los_hallazgos_en_el_orden_del_artefacto(self):
+        base = {"estado": "valida", "detalle": "", "pendientes": [],
+                "cita_directa_visible": False}
+        primero = dict(HALLAZGO, donde="fuera", problema="Primero")
+        segundo = dict(HALLAZGO, donde="funcion", problema="Segundo")
+        resultados = {"p": [dict(base, hallazgos=[primero, segundo]),
+                            dict(base, hallazgos=[segundo])]}
+        informe = ev.resumir([POSITIVO], resultados, "m", 2)
+        self.assertIn("**Localización de positivos** · Sin revisiones válidas con cita directa visible.",
+                      informe)
+        self.assertIn("Repetición 1, hallazgo 1 (media) [fuera] en `a.py`: Primero", informe)
+        self.assertIn("Repetición 1, hallazgo 2 (media) [funcion] en `a.py`: Segundo", informe)
+        self.assertIn("Repetición 2, hallazgo 1 (media) [funcion] en `a.py`: Segundo", informe)
 
 
 class TestMain(unittest.TestCase):
@@ -717,6 +803,51 @@ class TestMain(unittest.TestCase):
         codigo, revisar, salida = self.main([])
         self.assertEqual((codigo, salida.strip()), (0, "lista"))
         revisar.assert_not_called()
+
+    def test_listado_avisa_si_falta_cita_directa_y_permite_el_caso(self):
+        salida = io.StringIO()
+        with mock.patch.object(ev, "cargar_casos", return_value=[POSITIVO]), \
+                mock.patch.object(ev, "objetivos", return_value={"b.py": [(1, 1, "")]}), \
+                mock.patch.object(mr, "obtener_diff", return_value=DIFF), \
+                mock.patch.object(mr.urllib.request, "urlopen") as abrir, redirect_stdout(salida):
+            codigo = ev.main([])
+        self.assertEqual(codigo, 0)
+        self.assertIn("sin cita directa visible", salida.getvalue())
+        abrir.assert_not_called()
+
+    def test_listado_y_ejecucion_rechazan_todo_el_lote_si_hay_casos_no_evaluables(self):
+        vacio = dict(NEGATIVO, id="vacio", cabeza="b" * 40)
+        sin_objetivo = dict(POSITIVO, id="sin-objetivo", cabeza="c" * 40)
+        casos = [POSITIVO, vacio, sin_objetivo]
+        registro = {"estado": "valida", "detalle": "", "solicitudes": 0,
+                    "recortado": False, "hallazgos": [], "pendientes": []}
+        for argv in ([], ["--ejecutar"]):
+            salida = io.StringIO()
+            with self.subTest(argv=argv), \
+                    mock.patch.dict(os.environ, {"MISTRAL_API_KEY": "clave"}), \
+                    mock.patch.object(ev, "cargar_casos", return_value=casos), \
+                    mock.patch.object(mr, "obtener_diff",
+                                      side_effect=lambda base, cabeza: "" if cabeza == vacio["cabeza"] else DIFF), \
+                    mock.patch.object(ev, "objetivos",
+                                      side_effect=lambda caso: {} if caso == sin_objetivo else {"a.py": [(1, 2, "f")]}), \
+                    mock.patch.object(ev, "revisar", return_value=registro) as revisar, \
+                    mock.patch.object(mr, "escribir_resumen"), redirect_stdout(salida):
+                codigo = ev.main(argv)
+                self.assertEqual(codigo, 2)
+                revisar.assert_not_called()
+                self.assertIn("Caso vacio: diff vacío tras aplicar exclusiones", salida.getvalue())
+                self.assertIn("Caso sin-objetivo: positivo sin objetivo derivable tras aplicar exclusiones",
+                              salida.getvalue())
+
+    def test_listado_valido_comprueba_solo_los_casos_seleccionados(self):
+        salida = io.StringIO()
+        with mock.patch.object(ev, "cargar_casos", return_value=[POSITIVO, NEGATIVO]), \
+                mock.patch.object(mr, "obtener_diff", return_value=DIFF) as obtener_diff, \
+                mock.patch.object(ev, "objetivos", return_value={"a.py": [(1, 2, "f")]}), \
+                redirect_stdout(salida):
+            self.assertEqual(ev.main(["--solo", "p"]), 0)
+        obtener_diff.assert_called_once_with(POSITIVO["base"], POSITIVO["cabeza"])
+        self.assertEqual(salida.getvalue(), "p [positivo] diff=%d caracteres\n  a.py\n    1-2 f\n" % len(DIFF))
 
     def test_sin_clave_no_evalua_y_falla(self):
         codigo, revisar, salida = self.main(["--ejecutar"])
@@ -758,6 +889,8 @@ class TestMain(unittest.TestCase):
                         "recortado": False, "hallazgos": [], "pendientes": []}
             with mock.patch.dict(os.environ, con_clave), \
                     mock.patch.object(ev, "cargar_casos", return_value=[POSITIVO]), \
+                    mock.patch.object(mr, "obtener_diff", return_value=DIFF), \
+                    mock.patch.object(ev, "objetivos", return_value={"a.py": [(1, 2, "f")]}), \
                     mock.patch.object(ev, "revisar", side_effect=lambda c, m, k, **_: (
                         vistos.append((m, mr.ESFUERZO)), dict(registro))[1]), \
                     mock.patch.object(mr, "escribir_resumen"), redirect_stdout(salida):
@@ -784,6 +917,8 @@ class TestMain(unittest.TestCase):
             salida = io.StringIO()
             with mock.patch.dict(os.environ, {"MISTRAL_API_KEY": "clave"}), \
                     mock.patch.object(ev, "cargar_casos", return_value=[POSITIVO]), \
+                    mock.patch.object(mr, "obtener_diff", return_value=DIFF), \
+                    mock.patch.object(ev, "objetivos", return_value={"a.py": [(1, 2, "f")]}), \
                     mock.patch.object(ev, "revisar", side_effect=lambda c, m, k, **_: (
                         vistos.append(mr.MAX_SALIDA), dict(registro))[1]), \
                     mock.patch.object(mr, "escribir_resumen"), redirect_stdout(salida):

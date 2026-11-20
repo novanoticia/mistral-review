@@ -19,12 +19,19 @@ mismo código que un PR (diff, contexto, prompt, llamada y validación de
 
 | Tipo | Qué es | Qué se cuenta |
 |---|---|---|
-| **positivo** | `cabeza` tiene un defecto conocido; `arreglo` es el commit que lo corrigió. | Si algún hallazgo cita una línea dentro de una función que el arreglo tocó («señala la función»). |
-| **negativo** | Sobre `cabeza`, Mistral publicó hallazgos que la auditoría contrastó como falsos. | Cuántos hallazgos hay y cuántos caen otra vez en los mismos archivos. |
+| **positivo** | `cabeza` tiene un defecto conocido; `arreglo` es el commit que lo corrigió. | Cuántos hallazgos hay y si alguna cita coincide con el objetivo, cuando este se puede citar. |
+| **negativo** | Sobre `cabeza`, Mistral publicó hallazgos que la auditoría contrastó como falsos. | Cuántos hallazgos hay y cuántos citan de nuevo los archivos históricos, cuando estos se pueden citar. |
 
-El objetivo de un positivo no se escribe a mano: se deriva del diff entre la
-cabeza y el arreglo (funciones Python que no son tests). `ignorar` excluye
-archivos que el arreglo tocó sin ser el defecto.
+El objetivo de un positivo se deriva del diff entre la cabeza y el arreglo
+(funciones o líneas de módulo en código Python fuera de los tests). Los
+mismos patrones de exclusión se aplican al diff revisado y a la búsqueda del
+objetivo. `ignorar` excluye además archivos que el arreglo tocó de paso.
+
+La coincidencia por ubicación requiere al menos una línea completa y citable
+del diff enviado que caiga en el rango objetivo de un positivo o en una ruta
+histórica de un negativo. Los casos sin esa cita directa se revisan y sus
+hallazgos se pueden evaluar a mano. El informe los deja fuera del recuento
+de coincidencias por ubicación.
 
 En `email-triage-plugin` hay 7 positivos (#123, #125, #126, #143, #199 y
 dos de #200) y 5 negativos (#108, #114, #116, #123, #140), PR de ese repo,
@@ -34,20 +41,18 @@ más un **caso de control**
 El control es un defecto sintético y evidente: `_porcentaje` en
 `scripts/distribucion_tiers.py` con la guarda invertida, que se ve entero en
 un diff de pocas líneas. Su defecto y su arreglo son dos commits seguidos del
-mismo PR, así que en `main` solo queda la versión correcta. Sirve para separar
-dos lecturas de un 0 de 7: si un modelo tampoco ve el control, no ve defectos
-evidentes; si lo ve y falla los reales, los casos reales piden algo que el
-revisor no recibe (contexto de otros archivos, conocer el proyecto). No cuenta
-entre los 7: los resultados se comparan aparte.
+mismo PR, así que en `main` solo queda la versión correcta. El resultado del
+control se informa aparte de los siete positivos del historial. Un acierto
+confirma que la configuración detectó ese defecto evidente. Si falla otros
+casos, hay que examinar sus entradas, respuestas y validación para saber
+por qué.
 
 ## Lo que no mide
 
-- **Señalar la función no prueba acertar.** Un hallazgo puede caer en la
-  función correcta y describir otra cosa. El informe lista cada hallazgo para
-  que una persona lo etiquete; solo esa etiqueta es el resultado.
-- **No señalarla sí es informativo:** el defecto no se vio.
-- En los negativos, un hallazgo nuevo en el mismo archivo no es
-  automáticamente falso: hay que leerlo.
+- **La ubicación de una cita es una pista.** Un hallazgo puede caer en la
+  función correcta y describir otro problema, o describir el defecto esperado
+  desde otra ubicación. En los negativos, un hallazgo nuevo en un archivo
+  histórico también puede ser real. El acierto se decide leyendo la evidencia.
 - Doce casos y pocas repeticiones dan una impresión con números, no una
   estadística. No sirven para comparar diferencias pequeñas.
 - Los casos proceden de este repositorio y los positivos los encontraron
@@ -67,10 +72,11 @@ entre los 7: los resultados se comparan aparte.
 En el repo evaluado, copia [`ejemplos/mistral-eval.yml`](../ejemplos/mistral-eval.yml)
 en `.github/workflows/` y los casos en `.github/eval/casos.json` (plantilla:
 [`ejemplos/eval-casos.json`](../ejemplos/eval-casos.json)). Después,
-**Actions → Mistral Eval → Run workflow.** Cuatro campos:
+**Actions → Mistral Eval → Run workflow.** Estos son los campos del formulario.
 
 - `repeticiones`: revisiones por caso (2 por defecto).
-- `solo`: ids separados por comas; vacío evalúa todos.
+- `solo` admite identificadores de casos separados por comas. Deja el campo
+  vacío para evaluar todos los casos.
 - `modelo`: un modelo solo para esta evaluación (por ejemplo
   `mistral-large-2512` o `codestral-latest`). Vacío usa `MISTRAL_MODEL`. El
   revisor de los PR no cambia: sirve para comparar modelos sin tocarlo. Con
@@ -87,6 +93,14 @@ en `.github/workflows/` y los casos en `.github/eval/casos.json` (plantilla:
   256.000: ~0,31 $ por respuesta). La espera por petición crece con el tope
   (1 s por cada 100 tokens, mínimo 180 s), porque la API responde de una vez
   al terminar. Si el modelo no admite tanto, la API responde 400 sin cobrar.
+
+El paso **Comprobar casos y objetivos sin llamar a la API** revisa todos los
+casos seleccionados antes de hacer peticiones. La comprobación falla con
+código `2` si algún caso tiene un diff vacío tras las exclusiones o si un
+positivo carece de un objetivo que se pueda derivar del arreglo. Abre el
+detalle de ese paso para ver el identificador y el motivo. Corrige el caso o,
+si solo quieres evaluar otros, vuelve a **Run workflow**, escribe sus
+identificadores en `solo` y lanza esa selección.
 
 El resultado sale abreviado en el resumen de la ejecución. El artefacto
 `mistral-eval` conserva el fragmento, el problema, el escenario y el arreglo
@@ -182,13 +196,27 @@ o se agota el tiempo, el artefacto `mistral-eval` conserva lo ya revisado:
 cerrar tras la cancelación. La ejecución #5 (esfuerzo `high`, 12 casos) se
 canceló a los 90 minutos sin dejar nada; esto lo evita.
 
-Sin `--ejecutar`, el script solo lista los casos y sus objetivos y no llama
-a la API:
+Sin `--ejecutar`, el script hace la misma comprobación previa y lista los
+casos y sus objetivos sin llamar a la API. Puedes añadir `--solo` con los
+identificadores que quieras comprobar.
 
 ```bash
 # desde la raíz del repo evaluado, con mistral-review clonado al lado
 python3 ../mistral-review/scripts/mistral_eval.py
 ```
+
+## Cómo etiquetar los hallazgos
+
+En **Hallazgos para etiquetar**, el resumen numera los hallazgos dentro de
+cada caso y repetición. Anota ese identificador, el número de repetición y el
+número de hallazgo junto con tu etiqueta. Usa el artefacto para leer el
+fragmento y el escenario completos. Conserva la evidencia tal como se guardó
+y apunta tu valoración aparte.
+
+- **Acierto objetivo** si describe el defecto conocido y su escenario.
+- **Otro defecto real** si demuestra un fallo distinto del esperado.
+- **Falso positivo** si el código contradice el escenario descrito.
+- **Dudoso** si la evidencia disponible no permite decidir.
 
 ## Cómo añadir un caso
 
@@ -197,7 +225,12 @@ python3 ../mistral-review/scripts/mistral_eval.py
    base y los archivos de los hallazgos falsos.
 2. Añádelo a `.github/eval/casos.json` con los SHA completos y una frase en
    `defecto` que diga qué debería verse.
-3. Ejecuta el listado y comprueba que el objetivo es la función del defecto.
+3. Ejecuta el listado. Comprueba que el objetivo coincide con el defecto y
+   si se puede citar en el diff preparado.
+
+`defecto` y `arreglo` son referencias para evaluar y etiquetar. Quedan en
+los metadatos del artefacto. Mantén la solución fuera del material que lee el
+modelo, incluida la guía, y conserva `cabeza` en el commit anterior al arreglo.
 
 Si se usa la evaluación para ajustar el prompt, hay que separar casos de
 ajuste y de evaluación: medir con los mismos casos con los que se ajustó solo
@@ -228,10 +261,9 @@ por citar dos líneas; las sustituye #11).
 
 Lo que se aprendió:
 
-- **Todos los modelos fiables ven el defecto evidente y ninguno ve los
-  reales.** El control descarta que «0 de 7» signifique que no leen el diff:
-  los defectos del historial piden algo que este revisor no tiene (contexto
-  de otros archivos, conocer el proyecto). La detección sigue siendo de Codex.
+- **El control se detectó en varias ejecuciones y los positivos del historial
+  ofrecieron resultados distintos.** La falta de contexto de otros archivos
+  o del proyecto queda como una posible explicación de los fallos.
 - **DeepSeek V4.1 Flash es el único que acertó un defecto real** (p125, con
   el escenario de `compactar --dias 30` y un segundo hallazgo real), pero no
   termina: agotó la salida razonando en 12 de 13 casos con 16.000 tokens, en
