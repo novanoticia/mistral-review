@@ -377,8 +377,7 @@ def clasificar(hallazgo, diff, destino):
 
 
 def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
-    """Una revisión del caso, igual que main(): devuelve un registro sin texto libre
-    del modelo salvo los hallazgos y pendientes ya validados."""
+    """Evalúa un caso y registra su resultado junto con los intentos de respuesta."""
     # Tachado antes de enviar, validar y clasificar, como en main(): una cita
     # de una línea con secreto llega al modelo tachada (revisión Codex,
     # mistral-review#3).
@@ -390,12 +389,19 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
     rutas = mr.obtener_rutas_diff(caso["base"], caso["cabeza"])
     registro = {"estado": "invalida", "detalle": "", "solicitudes": 0,
                 "recortado": recortado, "hallazgos": [], "pendientes": [],
-                "rechazadas": []}
+                "rechazadas": [], "cortes_salida": 0}
     try:
-        for _ in range(mr.INTENTOS_RESPUESTA):
+        for solicitud in range(1, mr.INTENTOS_RESPUESTA + 1):
             registro["solicitudes"] += 1
-            texto = mr.llamar_mistral(mensajes, modelo, clave,
-                                      proveedor=proveedor, ruta=ruta)
+            try:
+                texto = mr.llamar_mistral(mensajes, modelo, clave,
+                                          proveedor=proveedor, ruta=ruta)
+            except mr.RespuestaIncompleta as fallo:
+                if fallo.causa == "length":
+                    registro["cortes_salida"] += 1
+                    if solicitud < mr.INTENTOS_RESPUESTA:
+                        continue
+                raise
             diagnostico = []
             resultado = mr.interpretar(texto, diff[:mr.MAX_DIFF],
                 exigir_comprobaciones=True, rutas_comprobaciones=rutas,
@@ -423,7 +429,7 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
                         detalle=fallo.causa or "incompleta")
         return registro
     except ValueError:
-        registro.update(estado="cortada", detalle="incompleta")
+        registro.update(estado="error", detalle="formato_respuesta")
         return registro
     if resultado is None:
         return registro
@@ -462,7 +468,10 @@ def resumir(casos, resultados, modelo, repeticiones, proveedor="mistral", ruta="
         len(validas), len(ejecuciones), ", ".join(
             "%s: %d" % (e, sum(r["estado"] == e for r in ejecuciones))
             for e in ("invalida", "cortada", "error")
-            if any(r["estado"] == e for r in ejecuciones)) or "sin fallos"))
+            if any(r["estado"] == e for r in ejecuciones)) or "sin fallos finales"))
+    cortes = sum(r.get("cortes_salida", 0) for r in ejecuciones)
+    if cortes:
+        partes.append("- **Respuestas cortadas por límite de salida:** %d." % cortes)
     positivos = [c for c in casos if c["tipo"] == "positivo" and not c.get("control")]
     controles = [c for c in casos if c.get("control")]
     negativos = [c for c in casos if c["tipo"] == "negativo"]
