@@ -57,7 +57,9 @@ MAX_LLAMADAS = 80  # tope de peticiones HTTP por ejecución: cada una cuesta din
 # de 3 revisiones (ejecución #8). Peor caso: 256.000 × 1,20 $/M ≈ 0,31 $ por
 # respuesta. Si el modelo no admite tanto, la API responde 400 sin cobrar.
 MAX_SALIDA_MINIMA, MAX_SALIDA_MAXIMA = 4000, 256000
-MAX_RECHAZADA = 20000  # caracteres que se guardan de cada respuesta rechazada
+MAX_RECHAZADA = 20000  # caracteres de la vista filtrada de una respuesta rechazada
+CAMPOS_HALLAZGO = ("severidad", "archivo", "fragmento", "problema", "escenario", "arreglo")
+CAMPOS_PENDIENTE = ("archivo", "escenario", "conclusion")
 # Espera por petición en la evaluación: la del revisor (180 s) o más si el tope
 # de salida lo pide. La API responde de una vez al terminar; DeepSeek tardó
 # ~145 s en 32.000 tokens (ejecución #8), así que con un tope mayor una espera
@@ -376,6 +378,33 @@ def clasificar(hallazgo, diff, destino):
     return "archivo"
 
 
+def _campos_filtrados(objeto, campos):
+    if not isinstance(objeto, dict):
+        return {}
+    return {campo: mr.mask_secrets(objeto[campo]) for campo in campos
+            if isinstance(objeto.get(campo), str)}
+
+
+def _vista_rechazada(texto):
+    """Extracto de los campos reconocidos para diagnosticar un rechazo."""
+    try:
+        datos = json.loads(texto)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(datos, dict):
+        return None
+    # El filtro se aplica a las cadenas decodificadas, antes de escapar comillas.
+    vista = _campos_filtrados(datos, ("resumen",))
+    for grupo, campos in (("hallazgos", CAMPOS_HALLAZGO),
+                          ("comprobaciones", CAMPOS_PENDIENTE + ("estado",))):
+        filas = datos.get(grupo)
+        if isinstance(filas, list):
+            vista[grupo] = [_campos_filtrados(fila, campos) for fila in filas]
+    if vista:
+        return json.dumps(vista)[:MAX_RECHAZADA]
+    return None
+
+
 def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
     """Evalúa un caso y registra su resultado junto con los intentos de respuesta."""
     # Tachado antes de enviar, validar y clasificar, como en main(): una cita
@@ -409,13 +438,11 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
             registro["detalle"] = ", ".join(diagnostico)
             if resultado is not None:
                 break
-            # Solo en el artefacto, nunca en el resumen: sin el texto no se
-            # sabe si el modelo vio el defecto y falló el formato (GLM 5.3
-            # Flash en el control, ejecución #7: cita de varias líneas).
-            registro["rechazadas"].append({
-                "detalle": registro["detalle"],
-                "caracteres": len(texto),
-                "texto": texto[:MAX_RECHAZADA]})
+            rechazo = {"detalle": registro["detalle"], "caracteres": len(texto)}
+            vista = _vista_rechazada(texto)
+            if vista is not None:
+                rechazo["texto"] = vista
+            registro["rechazadas"].append(rechazo)
     except urllib.error.HTTPError as fallo:
         registro.update(estado="error", detalle="HTTP %d" % fallo.code)
         return registro
@@ -436,18 +463,12 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
     destino = objetivos(caso)
     registro["estado"] = "valida"
     for h in resultado[1]:
-        # Campos completos ya validados: sin el escenario y el fragmento no se
-        # puede etiquetar si el hallazgo es el defecto conocido u otra cosa.
-        registro["hallazgos"].append(dict(
-            {c: h[c] for c in ("severidad", "archivo", "fragmento", "problema",
-                               "escenario", "arreglo")},
-            donde=clasificar(h, diff[:mr.MAX_DIFF], destino)))
+        donde = clasificar(h, diff[:mr.MAX_DIFF], destino)
+        registro["hallazgos"].append(dict(_campos_filtrados(h, CAMPOS_HALLAZGO), donde=donde))
     for c in json.loads(texto)["comprobaciones"]:
         if c["estado"] == "pendiente":
-            registro["pendientes"].append({
-                "archivo": c["archivo"], "escenario": c["escenario"],
-                "conclusion": c["conclusion"],
-                "donde": "archivo" if c["archivo"] in destino else "fuera"})
+            donde = "archivo" if c["archivo"] in destino else "fuera"
+            registro["pendientes"].append(dict(_campos_filtrados(c, CAMPOS_PENDIENTE), donde=donde))
     return registro
 
 
@@ -672,8 +693,9 @@ def main(argv=None):
         informe += "\nCoste: la API no lo informa; no se estima.\n"
     rechazadas = sum(len(r.get("rechazadas", ())) for rs in resultados.values() for r in rs)
     if rechazadas:
-        informe += ("\n%d respuesta(s) rechazadas por el formato: su texto está en el "
-                    "artefacto `mistral-eval` (campo `rechazadas`).\n" % rechazadas)
+        informe += ("\n%d respuesta(s) rechazadas por el formato. Los motivos y las vistas "
+                    "disponibles están en el artefacto `mistral-eval` (campo `rechazadas`).\n"
+                    % rechazadas)
     if presupuesto.sin_esfuerzo:
         informe += ("\n**El modelo no admite el esfuerzo de razonamiento:** %d "
                     "respuesta(s) llegaron sin él; en ellas no se aplicó. Tras el "

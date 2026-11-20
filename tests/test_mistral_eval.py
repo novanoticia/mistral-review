@@ -245,19 +245,29 @@ class TestRevisar(unittest.TestCase):
         self.assertEqual((registro["estado"], api.call_count), ("invalida", 2))
         self.assertEqual(registro["hallazgos"], [])
 
-    def test_guarda_el_texto_de_las_respuestas_rechazadas(self):
+    def test_rechazo_sin_json_guarda_solo_el_motivo_y_la_longitud(self):
         registro, _ = self.revisar(["no json", "tampoco"])
-        self.assertEqual([r["texto"] for r in registro["rechazadas"]], ["no json", "tampoco"])
-        self.assertTrue(all(r["detalle"] for r in registro["rechazadas"]))
-        # Valida al segundo intento: queda la primera, rechazada.
+        self.assertEqual(registro["rechazadas"], [
+            {"detalle": "json_invalido", "caracteres": len("no json")},
+            {"detalle": "json_invalido", "caracteres": len("tampoco")}])
+
+    def test_la_vista_rechazada_tiene_tope_y_se_conserva_al_recuperar_la_revision(self):
+        rechazado = json.dumps({"resumen": "x" * (ev.MAX_RECHAZADA + 50)})
         texto = json.dumps({"resumen": "R", "hallazgos": [HALLAZGO],
                             "comprobaciones": COMPROBACIONES})
-        registro, _ = self.revisar(["x" * (ev.MAX_RECHAZADA + 50), texto])
+        registro, _ = self.revisar([rechazado, texto])
         self.assertEqual(registro["estado"], "valida")
         self.assertEqual(len(registro["rechazadas"]), 1)
         rechazada = registro["rechazadas"][0]
         self.assertEqual(len(rechazada["texto"]), ev.MAX_RECHAZADA)
-        self.assertEqual(rechazada["caracteres"], ev.MAX_RECHAZADA + 50)
+        self.assertEqual(rechazada["caracteres"], len(rechazado))
+        self.assertEqual(rechazada["detalle"], "hallazgos_no_lista")
+
+    def test_json_sin_campos_conocidos_no_tiene_vista_de_rechazo(self):
+        for texto in ('["campo libre"]', '{"desconocido": "campo libre"}'):
+            with self.subTest(texto=texto):
+                registro, _ = self.revisar([texto, texto])
+                self.assertTrue(all("texto" not in r for r in registro["rechazadas"]))
 
     def test_el_registro_conserva_el_hallazgo_entero_para_etiquetarlo(self):
         largo = dict(HALLAZGO, problema="p" * 900, escenario="entrada " + "e" * 900,
@@ -296,7 +306,8 @@ class TestRevisar(unittest.TestCase):
         self.assertEqual((registro["estado"], registro["detalle"]), ("cortada", "length"))
         self.assertEqual(api.call_count, 2)
         self.assertEqual(registro["cortes_salida"], 1)
-        self.assertEqual([r["texto"] for r in registro["rechazadas"]], ["no json"])
+        self.assertEqual(registro["rechazadas"], [
+            {"detalle": "json_invalido", "caracteres": len("no json")}])
 
     def test_el_reintento_por_corte_respeta_el_presupuesto_http(self):
         with mock.patch.object(mr.urllib.request, "urlopen",
@@ -482,6 +493,68 @@ class TestGuardadoParcial(unittest.TestCase):
         self.assertTrue(final["incompleta"])
         self.assertEqual(len(final["resultados"]["p"]), 1)
         self.assertIn("Evaluación cancelada", salida)
+
+    def test_protege_el_json_parcial_el_final_y_el_resumen(self):
+        valor = "valor-ficticio-de-prueba"
+        desconocido = "campo-ajeno-al-esquema"
+        frase = 'El caso contiene password: "%s"' % valor
+        tachada = 'El caso contiene password: "***"'
+        hallazgo = dict(HALLAZGO, problema=frase, escenario=frase, arreglo=frase)
+        pendiente = dict(COMPROBACIONES[0], escenario=frase, conclusion=frase)
+        valido = dict(resumen="R", hallazgos=[hallazgo], comprobaciones=[pendiente])
+        rechazado = json.dumps(dict(valido, resumen=frase,
+                                    hallazgos=[dict(hallazgo, arreglo={"nota": desconocido})],
+                                    comprobaciones=[dict(pendiente, estado="dudoso")],
+                                    meta=desconocido))
+        guardados = []
+        guardar = ev.guardar
+
+        def guardar_y_leer(ruta, datos):
+            guardar(ruta, datos)
+            with open(ruta, encoding="utf-8") as fh:
+                guardados.append(fh.read())
+
+        salida = io.StringIO()
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.dict(os.environ, {"MISTRAL_API_KEY": "clave"}), \
+                mock.patch.object(ev, "cargar_casos", return_value=[POSITIVO]), \
+                mock.patch.object(ev, "git", return_value="asunto"), \
+                mock.patch.object(ev, "objetivos", return_value={"a.py": [(1, 2, "f")]}), \
+                mock.patch.object(ev, "guardar", side_effect=guardar_y_leer), \
+                mock.patch.object(mr, "obtener_diff", return_value=DIFF), \
+                mock.patch.object(mr, "obtener_rutas_diff", return_value={"a.py"}), \
+                mock.patch.object(mr, "obtener_contexto", return_value=""), \
+                mock.patch.object(mr, "leer_guia", return_value=(None, "")), \
+                mock.patch.object(mr.urllib.request, "urlopen", side_effect=[
+                    TestRevisar.respuesta_http("stop", texto)
+                    for texto in (frase, rechazado, json.dumps(valido))]) as abrir, \
+                mock.patch.object(mr, "escribir_resumen") as resumen, redirect_stdout(salida):
+            ruta = os.path.join(d, "r.json")
+            codigo = ev.main(["--ejecutar", "--repeticiones", "2", "--salida", ruta])
+
+        self.assertEqual((codigo, abrir.call_count), (0, 3))
+        self.assertEqual(len(guardados), 3)
+        for texto in guardados + [salida.getvalue(), resumen.call_args.args[0]]:
+            self.assertNotIn(valor, texto)
+            self.assertNotIn(desconocido, texto)
+        estados = [json.loads(texto) for texto in guardados]
+        self.assertEqual([datos["en_curso"] for datos in estados], [True, True, False])
+        self.assertEqual([datos["peticiones"] for datos in estados], [2, 3, 3])
+        invalida, valida = estados[-1]["resultados"]["p"]
+        self.assertEqual((invalida["estado"], valida["estado"]), ("invalida", "valida"))
+        primero, segundo = invalida["rechazadas"]
+        self.assertEqual(primero, {"detalle": "json_invalido", "caracteres": len(frase)})
+        self.assertEqual(segundo["caracteres"], len(rechazado))
+        self.assertEqual(segundo["detalle"], "comprobacion_0_estado_invalido")
+        vista_hallazgo = json.loads(segundo["texto"])["hallazgos"][0]
+        self.assertEqual(vista_hallazgo["problema"], tachada)
+        self.assertNotIn("arreglo", vista_hallazgo)
+        self.assertEqual(valida["hallazgos"], [dict(HALLAZGO, donde="funcion",
+                                                   problema=tachada, escenario=tachada,
+                                                   arreglo=tachada)])
+        self.assertEqual(valida["pendientes"], [{"archivo": "a.py", "donde": "archivo",
+                                                "escenario": tachada, "conclusion": tachada}])
+        self.assertIn(tachada, resumen.call_args.args[0])
 
 
 class TestInforme(unittest.TestCase):
