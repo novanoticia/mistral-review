@@ -11,7 +11,7 @@ import os
 import subprocess
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 _RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -804,6 +804,79 @@ class TestMain(unittest.TestCase):
         self.assertEqual((codigo, salida.strip()), (0, "lista"))
         revisar.assert_not_called()
 
+    def test_contexto_auxiliar_se_opta_y_no_amplia_las_citas_del_diff(self):
+        valor = "valor-ficticio-del-contexto"
+        fuente_auxiliar = ('def auxiliar(x):\n    password = "%s"\n'
+                           '    return x + len(password)\n' % valor) + "\n" * 15
+        inicio = len(fuente_auxiliar.splitlines()) + 1
+        fuente = fuente_auxiliar + "def f(x):\n    return auxiliar(x)\n"
+        diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+                "@@ -%d,2 +%d,2 @@\n def f(x):\n-    return x\n+    return auxiliar(x)\n"
+                % (inicio, inicio))
+        valido = {"resumen": "R", "hallazgos": [dict(HALLAZGO, fragmento="return auxiliar(x)")],
+                  "comprobaciones": COMPROBACIONES}
+        rechazado = dict(valido, hallazgos=[dict(HALLAZGO, fragmento="return x + len(password)")])
+        respuestas = [TestRevisar.respuesta_http("stop", json.dumps(respuesta))
+                      for respuesta in (valido, rechazado, valido)]
+        artefactos = []
+
+        with mock.patch.dict(os.environ, {"MISTRAL_API_KEY": "clave", "MISTRAL_PROVEEDOR": "mistral"}), \
+                mock.patch.object(ev, "cargar_casos", return_value=[POSITIVO]), \
+                mock.patch.object(ev, "_procedencia", return_value={}), \
+                mock.patch.object(ev, "git", return_value="asunto"), \
+                mock.patch.object(ev, "objetivos", return_value={"a.py": [(inicio, inicio + 1, "f")]}), \
+                mock.patch.object(mr, "obtener_diff", return_value=diff), \
+                mock.patch.object(mr, "obtener_rutas_diff", return_value={"a.py"}), \
+                mock.patch.object(mr, "leer_guia", return_value=(None, "")), \
+                mock.patch.object(mr.subprocess, "run", return_value=mock.Mock(
+                    returncode=0, stdout=fuente.encode("utf-8"))), \
+                mock.patch.object(mr.urllib.request, "urlopen", side_effect=respuestas) as abrir, \
+                mock.patch.object(ev, "guardar", side_effect=lambda _, datos: artefactos.append(
+                    json.loads(json.dumps(datos)))), \
+                mock.patch.object(mr, "escribir_resumen"), redirect_stdout(io.StringIO()):
+            args = ["--ejecutar", "--repeticiones", "1", "--salida", "r.json"]
+            self.assertEqual(ev.main(args), 0)
+            self.assertEqual(ev.main(args + ["--contexto", "auxiliar-local"]), 0)
+
+        self.assertEqual(abrir.call_count, 3)
+        self.assertEqual([(a["contexto_modo"], a["en_curso"]) for a in artefactos], [
+            ("estandar", True), ("estandar", False), ("auxiliar-local", True), ("auxiliar-local", False)])
+        self.assertNotIn(valor, json.dumps(artefactos))
+        peticion_base, peticion_auxiliar, reintento = [json.loads(c.args[0].data)
+                                                      for c in abrir.call_args_list]
+        self.assertEqual(peticion_auxiliar, reintento)
+        mensajes_base = peticion_base.pop("messages")
+        mensajes_auxiliares = peticion_auxiliar.pop("messages")
+        self.assertEqual(peticion_base, peticion_auxiliar)
+        self.assertEqual(mensajes_base[0], mensajes_auxiliares[0])
+        usuario_base, usuario_auxiliar = mensajes_base[1]["content"], mensajes_auxiliares[1]["content"]
+        self.assertEqual(usuario_base.split("\n\n## Contexto adicional", 1)[0],
+                         usuario_auxiliar.split("\n\n## Contexto adicional", 1)[0])
+        self.assertEqual(usuario_base.split("\n\n## Diff", 1)[1], usuario_auxiliar.split("\n\n## Diff", 1)[1])
+        self.assertNotIn("def auxiliar(x):", usuario_base)
+        self.assertIn("def auxiliar(x):", usuario_auxiliar)
+        self.assertIn('password = "***"', usuario_auxiliar)
+        self.assertNotIn(valor, usuario_auxiliar)
+        base = artefactos[1]["resultados"]["p"][0]
+        auxiliar = artefactos[3]["resultados"]["p"][0]
+        self.assertNotIn("caracteres_auxiliares", base["cobertura"]["contexto"])
+        self.assertGreater(auxiliar["cobertura"]["contexto"]["caracteres_auxiliares"], 0)
+        self.assertEqual((base["estado"], auxiliar["estado"]), ("valida", "valida"))
+        self.assertEqual((base["solicitudes"], auxiliar["solicitudes"]), (1, 2))
+        self.assertEqual(base["hallazgos"], auxiliar["hallazgos"])
+        self.assertIn("cita_fuera_del_diff", auxiliar["rechazadas"][0]["detalle"])
+
+    def test_contexto_desconocido_falla_antes_de_leer_casos_o_llamar(self):
+        salida = io.StringIO()
+        with mock.patch.object(ev, "cargar_casos") as cargar, \
+                mock.patch.object(mr.urllib.request, "urlopen") as abrir, redirect_stderr(salida), \
+                self.assertRaises(SystemExit) as error:
+            ev.main(["--ejecutar", "--contexto", "inventado"])
+        self.assertEqual(error.exception.code, 2)
+        self.assertIn("auxiliar-local", salida.getvalue())
+        cargar.assert_not_called()
+        abrir.assert_not_called()
+
     def test_listado_avisa_si_falta_cita_directa_y_permite_el_caso(self):
         salida = io.StringIO()
         with mock.patch.object(ev, "cargar_casos", return_value=[POSITIVO]), \
@@ -1001,6 +1074,25 @@ class TestWorkflowEval(unittest.TestCase):
         trabajo = ejemplo["jobs"]["mistral-eval"]
         entradas = self.cargar(".github/workflows/eval.yml")[True]["workflow_call"]["inputs"]
         self.assertLessEqual(set(trabajo["with"]), set(entradas))
+
+    def test_el_contexto_auxiliar_es_optativo_y_llega_al_evaluador(self):
+        ejemplo = self.cargar("ejemplos/mistral-eval.yml")
+        opcion = ejemplo[True]["workflow_dispatch"]["inputs"]["contexto"]
+        self.assertEqual(opcion["type"], "choice")
+        self.assertEqual(opcion["default"], "estandar")
+        self.assertEqual(opcion["options"], ["estandar", "auxiliar-local"])
+        self.assertEqual(ejemplo["jobs"]["mistral-eval"]["with"]["contexto"],
+                         "${{ inputs.contexto }}")
+
+        reutilizable = self.cargar(".github/workflows/eval.yml")
+        entrada = reutilizable[True]["workflow_call"]["inputs"]["contexto"]
+        self.assertEqual(entrada["default"], "estandar")
+        self.assertEqual(entrada["type"], "string")
+        pasos = [p for p in reutilizable["jobs"]["mistral-eval"]["steps"] if "run" in p]
+        self.assertEqual(len(pasos), 2)
+        for paso in pasos:
+            self.assertEqual(paso["env"]["CONTEXTO_EVAL"], "${{ inputs.contexto }}")
+            self.assertIn('--contexto "$CONTEXTO_EVAL"', paso["run"])
 
 
 if __name__ == "__main__":

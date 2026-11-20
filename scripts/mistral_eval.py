@@ -476,7 +476,7 @@ def _cambios_en_diff(diff):
     return rutas, lineas
 
 
-def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
+def revisar(caso, modelo, clave, proveedor="mistral", ruta="", *, contexto_modo="estandar"):
     """Evalúa un caso y registra su resultado junto con los intentos de respuesta."""
     # Tachado antes de enviar, validar y clasificar, como en main(): una cita
     # de una línea con secreto llega al modelo tachada (revisión Codex,
@@ -488,7 +488,10 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta=""):
     titulo = git("log", "-1", "--format=%s", caso["cabeza"]).strip()
     cobertura_guia, cobertura_contexto = {}, {}
     guia = mr.leer_guia(cobertura=cobertura_guia)
-    contexto = mr.obtener_contexto(prefijo, caso["cabeza"], cobertura=cobertura_contexto)
+    opciones_contexto = {"cobertura": cobertura_contexto}
+    if contexto_modo == "auxiliar-local":
+        opciones_contexto["auxiliares_locales"] = True
+    contexto = mr.obtener_contexto(prefijo, caso["cabeza"], **opciones_contexto)
     mensajes, recortado = mr.construir_mensajes(titulo, None, diff, guia, contexto)
     rutas = mr.obtener_rutas_diff(caso["base"], caso["cabeza"])
     rutas_visibles, lineas_visibles = _cambios_en_diff(prefijo)
@@ -695,6 +698,8 @@ def main(argv=None):
     ap.add_argument("--max-salida", default="",
                     help="max_tokens solo para esta evaluación, de %d a %d "
                          "(vacío = el del revisor)" % (MAX_SALIDA_MINIMA, MAX_SALIDA_MAXIMA))
+    ap.add_argument("--contexto", choices=("estandar", "auxiliar-local"), default="estandar",
+                    help="modo de contexto solo para esta evaluación (por defecto: estandar)")
     args = ap.parse_args(argv)
     casos = cargar_casos(args.casos)
     if args.solo.strip():
@@ -750,11 +755,15 @@ def main(argv=None):
     resultados = {c["id"]: [] for c in casos}
     agotado = cancelada = False
     procedencia = _procedencia()
+    opciones_revision = {}
+    if args.contexto != "estandar":
+        opciones_revision["contexto_modo"] = args.contexto
 
     def datos(en_curso):
         return {"proveedor": proveedor, "ruta": ruta,
                 "modelo": modelo, "repeticiones": args.repeticiones,
-                "esfuerzo": esfuerzo, "max_salida": max_salida, "en_curso": en_curso,
+                "esfuerzo": esfuerzo, "max_salida": max_salida, "contexto_modo": args.contexto,
+                "en_curso": en_curso,
                 "peticiones": presupuesto.usadas, "incompleta": agotado or cancelada,
                 "cancelada": cancelada, "procedencia": procedencia,
                 "tokens": {"entrada": presupuesto.entrada,
@@ -777,7 +786,8 @@ def main(argv=None):
                 for n in range(args.repeticiones):
                     antes = presupuesto.usadas
                     inicio = monotonic_ns()
-                    registro = revisar(c, modelo, clave, proveedor=proveedor, ruta=ruta)
+                    registro = revisar(c, modelo, clave, proveedor=proveedor, ruta=ruta,
+                                       **opciones_revision)
                     registro["duracion_ms"] = (monotonic_ns() - inicio) // 1_000_000
                     registro["solicitudes"] = presupuesto.usadas - antes
                     resultados[c["id"]].append(registro)
