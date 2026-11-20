@@ -233,7 +233,7 @@ def mask_secrets(texto):
     def ocultar(match):
         if not match.group(2).strip("`"):
             return match.group(0)
-        if match.group(2) == "inherit" and re.match(
+        if match.group(2).strip("`") == "inherit" and re.match(
                 r"secrets[\"']?[ \t]*:", match.group(1), re.IGNORECASE):
             return match.group(0)
         return match.group(1) + "***"

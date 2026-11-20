@@ -98,7 +98,8 @@ class TestSecretos(unittest.TestCase):
 
     def test_no_tacha_secrets_inherit(self):
         # Palabra clave de los workflows reutilizables, no un secreto.
-        for linea in ("    secrets: inherit", '"secrets": inherit'):
+        for linea in ("    secrets: inherit", '"secrets": inherit',
+                      "el literal `secrets: inherit`, con v1.3"):
             with self.subTest(linea=linea):
                 self.assertEqual(mr.mask_secrets(linea), linea)
         # Solo con la clave `secrets` y la palabra exacta.
