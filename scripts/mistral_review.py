@@ -114,6 +114,7 @@ MAX_DIFF = 150_000   # caracteres; codestral admite mucho más, el coste no
 MAX_GUIA = 60_000    # guías largas enteras (CLAUDE.md de email-triage: 37.000)
 MAX_CONTEXTO = 40_000
 MAX_ARCHIVO = 10_000
+MAX_AUXILIAR = 1_000  # incluye el bloque y el separador
 VENTANA = 15         # líneas alrededor de un cambio fuera de toda función
 MAX_ESPERA = 60     # no reintentar antes de Retry-After si supera este límite
 MAX_FUNCION_SHELL = 200  # líneas; una función mayor se trata como ventana
@@ -475,7 +476,90 @@ def _es_test(ruta):
     return nombre.startswith("test_") or "/tests/" in "/" + ruta
 
 
-def obtener_contexto(diff, cabeza, *, cobertura=None):
+def _ligaduras_adicionales(arbol, definiciones):
+    """Nombres con otra ligadura, incluso en ámbitos distintos del módulo."""
+    nombres = set()
+    for nodo in ast.walk(arbol):
+        if isinstance(nodo, ast.alias):
+            nombres.add(nodo.asname or nodo.name.split(".", 1)[0])
+        elif isinstance(nodo, ast.arg):
+            nombres.add(nodo.arg)
+        elif isinstance(nodo, ast.Name):
+            if isinstance(nodo.ctx, (ast.Store, ast.Del)):
+                nombres.add(nodo.id)
+            elif nodo.id in {"exec", "eval", "globals", "locals", "vars", "setattr", "delattr"}:
+                # La tabla de nombres puede cambiar dinámicamente.
+                nombres.add("*")
+        elif isinstance(nodo, ast.Attribute) and isinstance(nodo.ctx, (ast.Store, ast.Del)):
+            nombres.add(nodo.attr)
+        elif isinstance(nodo, (ast.Global, ast.Nonlocal)):
+            nombres.update(nodo.names)
+        elif isinstance(nodo, ast.MatchMapping) and nodo.rest:
+            nombres.add(nodo.rest)
+        else:
+            nombre = getattr(nodo, "name", None)
+            if isinstance(nombre, str) and nodo is not definiciones.get(nombre):
+                nombres.add(nombre)
+    return nombres
+
+
+def _auxiliares_python(texto, nuevas):
+    """Definiciones de módulo con una llamada directa en una línea nueva."""
+    try:
+        arbol = ast.parse(texto)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return
+    funciones = (ast.FunctionDef, ast.AsyncFunctionDef)
+    ambitos = funciones + (ast.ClassDef, ast.Lambda, ast.ListComp, ast.SetComp,
+                          ast.DictComp, ast.GeneratorExp)
+    declaraciones = [nodo for nodo in arbol.body if isinstance(nodo, funciones)]
+    definiciones = {nodo.name: nodo for nodo in declaraciones if not nodo.decorator_list}
+    if not definiciones:
+        return
+    nombres_ocupados = _ligaduras_adicionales(arbol, definiciones)
+    nombres_disponibles = definiciones.keys() - nombres_ocupados
+    if "*" in nombres_ocupados or not nombres_disponibles:
+        return
+    pila = [sentencia for nodo in declaraciones
+            if any(nodo.lineno <= numero <= nodo.end_lineno for numero in nuevas)
+            for sentencia in nodo.body]
+    llamadas = []
+    while pila:
+        nodo = pila.pop()
+        if isinstance(nodo, ambitos):
+            continue
+        if isinstance(nodo, ast.Call) and isinstance(nodo.func, ast.Name):
+            nombre = nodo.func
+            if nombre.lineno in nuevas and nombre.id in nombres_disponibles:
+                llamadas.append((nombre.lineno, nombre.col_offset, nombre.id))
+        pila.extend(ast.iter_child_nodes(nodo))
+    for nombre in dict.fromkeys(nombre for _, _, nombre in sorted(llamadas)):
+        yield definiciones[nombre]
+
+
+def _bloque_auxiliar(ruta, texto, lineas, nuevas, visibles, rangos, limite):
+    """Elige el bloque completo más corto que cabe y aporta código nuevo."""
+    mejor = ""
+    for nodo in _auxiliares_python(texto, nuevas):
+        inicio, fin = nodo.lineno, nodo.end_lineno
+        if fin - inicio >= limite or any(n in visibles for n in range(inicio, fin + 1)):
+            continue
+        if any(inicio <= hasta and desde <= fin for desde, hasta, _ in rangos):
+            continue
+        fuente = lineas[inicio - 1:fin]
+        if sum(len(linea) + 1 for linea in fuente) > limite:
+            continue
+        bloque = ("\n\n## Contexto auxiliar de %s (cabeza, fuera del diff visible)"
+                  "\n```python\n# líneas %d-%d · %s\n%s\n```"
+                  % (ruta, inicio, fin, nodo.name, "\n".join(fuente)))
+        # El tachado puede alargar valores cortos. El tope se aplica al bloque filtrado.
+        bloque = mask_secrets(bloque)
+        if len(bloque) <= limite and (not mejor or len(bloque) < len(mejor)):
+            mejor = bloque
+    return mejor
+
+
+def obtener_contexto(diff, cabeza, *, cobertura=None, auxiliares_locales=False):
     """Funciones completas (versión nueva) que contienen los cambios.
 
     Solo fuentes y tests Python y shell: no leer configuraciones de
@@ -484,10 +568,19 @@ def obtener_contexto(diff, cabeza, *, cobertura=None):
     los tests, para que el presupuesto no se gaste en estos. Cada archivo y
     el conjunto tienen un presupuesto visible, y se corta por líneas enteras.
     Si se pide cobertura, anota recuentos y recortes sin copiar el texto.
+    El experimento de evaluación permite añadir un auxiliar con el sobrante.
     """
     cambios = lineas_cambiadas(diff)
     candidatas = sorted((ruta for ruta in cambios if ruta.endswith((".py", ".sh"))),
                         key=lambda r: (_es_test(r), r))
+    nuevas, visibles = {}, {}
+    if auxiliares_locales:
+        for ruta, linea, numero in _lineas_de_hunks(diff):
+            if ruta.endswith(".py") and linea[0] in "+ ":
+                visibles.setdefault(ruta, set()).add(numero)
+                if linea.startswith("+"):
+                    nuevas.setdefault(ruta, set()).add(numero)
+    auxiliar = ""
     partes = []
     restante = MAX_CONTEXTO
     rutas_con_contexto = 0
@@ -534,18 +627,36 @@ def obtener_contexto(diff, cabeza, *, cobertura=None):
                 partes.append("Contexto de %s omitido por presupuesto: %s" % (
                     ruta, ", ".join(omitidos)[:300]))
             continue
-        partes.append("## %s%s\n```%s\n%s\n```" % (
+        seccion = "## %s%s\n```%s\n%s\n```" % (
             ruta, (" (contexto recortado: %s)" % ", ".join(omitidos)[:300])
             if omitidos else "", "python" if python else "bash",
-            "\n\n".join(bloques)))
+            "\n\n".join(bloques))
+        partes.append(seccion)
         rutas_con_contexto += 1
         restante -= usado
+        if ruta not in nuevas:
+            continue
+        ocupado = max(len(seccion), len(mask_secrets(seccion)))
+        sobrante_archivo = min(MAX_AUXILIAR, MAX_ARCHIVO - ocupado)
+        if sobrante_archivo <= 0:
+            continue
+        bloque = _bloque_auxiliar(ruta, texto, lineas, nuevas[ruta], visibles[ruta],
+                                 rangos, sobrante_archivo)
+        if bloque and (not auxiliar or len(bloque) < len(auxiliar)):
+            auxiliar = bloque
+    contexto = "\n\n".join(partes)
+    if auxiliar:
+        ocupado = max(len(contexto), len(mask_secrets(contexto)))
+        if ocupado + len(auxiliar) > MAX_CONTEXTO:
+            auxiliar = ""
     if cobertura is not None:
         cobertura.update(rutas_candidatas=len(candidatas),
                          rutas_con_contexto=rutas_con_contexto,
                          rutas_no_disponibles=rutas_no_disponibles,
                          recortado=recortado)
-    return "\n\n".join(partes)
+        if auxiliares_locales:
+            cobertura["caracteres_auxiliares"] = len(auxiliar)
+    return contexto + auxiliar
 
 
 def construir_mensajes(titulo, descripcion, diff, guia, contexto=""):

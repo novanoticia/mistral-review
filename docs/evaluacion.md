@@ -93,6 +93,9 @@ en `.github/workflows/` y los casos en `.github/eval/casos.json` (plantilla:
   256.000: ~0,31 $ por respuesta). La espera por petición crece con el tope
   (1 s por cada 100 tokens, mínimo 180 s), porque la API responde de una vez
   al terminar. Si el modelo no admite tanto, la API responde 400 sin cobrar.
+- `contexto` admite `estandar` (opción predeterminada) y `auxiliar-local`
+  (opción experimental). Está disponible en el workflow reutilizable y en el
+  ejemplo manual.
 
 El paso **Comprobar casos y objetivos sin llamar a la API** revisa todos los
 casos seleccionados antes de hacer peticiones. La comprobación falla con
@@ -204,6 +207,42 @@ identificadores que quieras comprobar.
 # desde la raíz del repo evaluado, con mistral-review clonado al lado
 python3 ../mistral-review/scripts/mistral_eval.py
 ```
+
+## Cómo comparar el contexto auxiliar
+
+En una evaluación con `auxiliar-local`, el revisor puede añadir hasta una
+función Python del mismo archivo por revisión. La busca en el cuerpo de otra
+función de módulo cuando una línea añadida completa (`+`) del diff visible
+llama directamente a un nombre simple que puede asociar con esa definición.
+La función auxiliar debe quedar fuera del diff visible y del contexto
+habitual. Solo se incorpora si cabe entera en el espacio sobrante tras
+aplicar el filtro de secretos. El bloque filtrado tiene un máximo de 1.000
+caracteres, incluidos el encabezado y el separador, dentro de los límites de
+contexto por archivo y por revisión.
+
+El JSON registra el modo en `contexto_modo`. En el modo experimental,
+`cobertura.contexto.caracteres_auxiliares` cuenta los caracteres añadidos en
+cada repetición y vale `0` cuando no se añade una función. En la terminal,
+el parámetro correspondiente es `--contexto auxiliar-local`.
+
+El efecto sobre los aciertos y los falsos positivos queda por medir. El
+protocolo para una comparación autorizada desde GitHub tiene dos ejecuciones
+de pago. Incluye casos positivos, negativos y casos reservados que no se
+hayan usado para diseñar la variante. Con pocas repeticiones, el resultado
+es exploratorio.
+
+1. Con el ejemplo actualizado en el repo evaluado, abre **Actions → Mistral
+   Eval → Run workflow**. Selecciona `estandar` en `contexto` y anota los casos
+   (`solo`), las repeticiones, la configuración del modelo y el proveedor.
+2. Repite con `auxiliar-local`, manteniendo los mismos casos, modelo,
+   proveedor, guía y repeticiones. Mantén el esfuerzo, el tope de salida y
+   las exclusiones. Comprueba en `procedencia` que los commits del revisor y
+   del repo evaluado coinciden entre ambas ejecuciones.
+3. Descarga los dos artefactos **mistral-eval**. Etiqueta los hallazgos con
+   los mismos criterios y compara los aciertos, falsos positivos y fallos
+   técnicos. Revisa también las peticiones, la latencia (`duracion_ms`), los
+   tokens y el coste cuando la API lo informe. Usa `caracteres_auxiliares`
+   para saber en qué repeticiones se añadió contexto.
 
 ## Cómo etiquetar los hallazgos
 

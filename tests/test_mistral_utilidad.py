@@ -190,6 +190,107 @@ class TestContexto(unittest.TestCase):
                     "rutas_con_contexto": con_contexto, "rutas_no_disponibles": 0,
                     "recortado": True})
 
+    AUXILIAR = ("def auxiliar(valor):\n    if valor is None:\n        raise ValueError('vacío')\n"
+                "    return str(valor)\n" + "\n" * 20
+                + "def procesa(valor=None):\n    return auxiliar(valor)\n")
+
+    def diff_auxiliar(self, fuente):
+        lineas = fuente.splitlines()
+        llamada = next(i for i, linea in enumerate(lineas, 1) if "auxiliar(valor)" in linea
+                       and linea.startswith("    return "))
+        return diff_de("a.py", llamada, lineas[llamada - 1])
+
+    def test_agrega_un_auxiliar_completo_despues_del_contexto_habitual(self):
+        diff = (self.diff_auxiliar(self.AUXILIAR) + diff_de("z.py", N_RECORTA, "x"))
+        fuentes = {"a.py": self.AUXILIAR, "z.py": FUENTE}
+        usual = self.contexto(diff, fuentes)
+        cobertura = {}
+        extendido = self.contexto(diff, fuentes, auxiliares_locales=True, cobertura=cobertura)
+        self.assertNotIn("def auxiliar", usual)
+        self.assertTrue(extendido.startswith(usual + "\n\n"))
+        self.assertIn("(cabeza, fuera del diff visible)", extendido[len(usual):])
+        self.assertIn(self.AUXILIAR.split("\n\n", 1)[0], extendido[len(usual):])
+        self.assertEqual(cobertura["caracteres_auxiliares"], len(extendido) - len(usual))
+        self.assertLessEqual(cobertura["caracteres_auxiliares"], 1000)
+
+    def test_agrega_auxiliar_con_llamante_en_una_sola_linea(self):
+        fuente = self.AUXILIAR.replace(":\n    return auxiliar(valor)",
+                                      ": return auxiliar(valor)")
+        lineas = fuente.splitlines()
+        diff = diff_de("a.py", len(lineas), lineas[-1])
+        texto = self.contexto(diff, {"a.py": fuente}, auxiliares_locales=True)
+        self.assertIn("def auxiliar(valor)", texto)
+
+    def test_omite_auxiliares_con_ligadura_dudosa_o_llamada_indirecta(self):
+        for fuente in (self.AUXILIAR.replace("procesa(valor=None)", "procesa(valor=None, auxiliar=str)"),
+                       self.AUXILIAR + "\nauxiliar = str\n",
+                       self.AUXILIAR + "\nfrom otra import auxiliar\n",
+                       "@decorador\n" + self.AUXILIAR,
+                       self.AUXILIAR.replace("return auxiliar(valor)", "return objeto.auxiliar(valor)")):
+            with self.subTest(fuente=fuente):
+                diff = self.diff_auxiliar(fuente)
+                fuentes = {"a.py": fuente}
+                cobertura = {}
+                self.assertEqual(self.contexto(diff, fuentes, auxiliares_locales=True,
+                                                cobertura=cobertura), self.contexto(diff, fuentes))
+                self.assertEqual(cobertura["caracteres_auxiliares"], 0)
+
+    def test_omite_auxiliar_si_no_hay_linea_nueva_completa_o_ya_aparece(self):
+        diff = self.diff_auxiliar(self.AUXILIAR)
+        fuentes = {"a.py": self.AUXILIAR}
+        for variante in (diff[:-1], diff_de("a.py", 2, "    if valor is None:") + diff):
+            with self.subTest(diff=variante):
+                cobertura = {}
+                self.assertEqual(self.contexto(variante, fuentes, auxiliares_locales=True,
+                                                cobertura=cobertura), self.contexto(variante, fuentes))
+                self.assertEqual(cobertura["caracteres_auxiliares"], 0)
+
+    def test_omite_auxiliar_solapado_solo_con_el_contexto_del_diff(self):
+        fuente = self.AUXILIAR.replace("    return str(valor)\n",
+                                      "    return str(valor)\n\ndef vecina():\n    return 42\n")
+        diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -4,3 +4,4 @@\n"
+                "     return str(valor)\n \n def vecina():\n+    return 42\n"
+                + self.diff_auxiliar(fuente))
+        fuentes = {"a.py": fuente}
+        usual = self.contexto(diff, fuentes)
+        self.assertNotIn("def auxiliar", usual)
+        self.assertEqual(self.contexto(diff, fuentes, auxiliares_locales=True), usual)
+
+    def test_omite_auxiliar_integro_demasiado_grande(self):
+        fuente = self.AUXILIAR.replace("return str(valor)", "return %r" % ("x" * 1000))
+        diff = self.diff_auxiliar(fuente)
+        fuentes = {"a.py": fuente}
+        self.assertEqual(self.contexto(diff, fuentes, auxiliares_locales=True),
+                         self.contexto(diff, fuentes))
+
+    def test_mide_el_limite_auxiliar_despues_de_tachar(self):
+        fuente = self.AUXILIAR.replace("    if valor is None:\n", "    token=0\n" * 65
+                                        + "    if valor is None:\n")
+        diff = self.diff_auxiliar(fuente)
+        fuentes = {"a.py": fuente}
+        usual = self.contexto(diff, fuentes)
+        with mock.patch.object(mr, "MAX_AUXILIAR", 2_000):
+            sin_tope_de_prueba = self.contexto(diff, fuentes, auxiliares_locales=True)
+        adicional = sin_tope_de_prueba[len(usual):]
+        self.assertGreater(len(mr.mask_secrets(adicional)), 1_000)
+        cobertura = {}
+        self.assertEqual(self.contexto(diff, fuentes, auxiliares_locales=True,
+                                       cobertura=cobertura), usual)
+        self.assertEqual(cobertura["caracteres_auxiliares"], 0)
+
+    def test_el_auxiliar_no_desplaza_contexto_y_respeta_los_limites(self):
+        diff_a = self.diff_auxiliar(self.AUXILIAR)
+        diff = diff_a + diff_de("z.py", N_RECORTA, "x")
+        fuentes = {"a.py": self.AUXILIAR, "z.py": FUENTE}
+        for nombre, limite in (("MAX_CONTEXTO", len(self.contexto(diff, fuentes))),
+                               ("MAX_ARCHIVO", len(self.contexto(diff_a, fuentes)))):
+            with self.subTest(limite=nombre), mock.patch.object(mr, nombre, limite):
+                usual = self.contexto(diff, fuentes)
+                cobertura = {}
+                self.assertEqual(self.contexto(diff, fuentes, auxiliares_locales=True,
+                                                cobertura=cobertura), usual)
+                self.assertEqual(cobertura["caracteres_auxiliares"], 0)
+
     def test_sin_sintaxis_valida_usa_ventanas(self):
         roto = "def roto(:\n" + "".join("linea %d\n" % i for i in range(100))
         texto = self.contexto(diff_de("roto.py", 50, "x"), {"roto.py": roto})

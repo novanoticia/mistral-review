@@ -12,6 +12,13 @@ on:
       solo:
         description: Ids de casos separados por comas (vacío = todos)
         default: ''
+      contexto:
+        description: Contexto de la evaluación
+        type: choice
+        default: estandar
+        options:
+          - estandar
+          - auxiliar-local
       modelo:
         description: Modelo solo para esta evaluación (vacío = MISTRAL_MODEL; con OpenRouter, organización/modelo)
         default: ''
@@ -34,6 +41,7 @@ jobs:
     with:
       repeticiones: ${{ inputs.repeticiones }}
       solo: ${{ inputs.solo }}
+      contexto: ${{ inputs.contexto }}
       modelo: ${{ inputs.modelo }}
       esfuerzo: ${{ inputs.esfuerzo }}
       max_salida: ${{ inputs.max_salida }}
