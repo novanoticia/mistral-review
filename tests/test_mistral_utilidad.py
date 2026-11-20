@@ -103,14 +103,14 @@ class TestRangos(unittest.TestCase):
 
 
 class TestContexto(unittest.TestCase):
-    def contexto(self, diff, fuentes):
+    def contexto(self, diff, fuentes, **opciones):
         def git_show(orden, **_):
             ruta = orden[2].split(":", 1)[1]
             if ruta not in fuentes:
                 return mock.Mock(returncode=128, stdout=b"")
             return mock.Mock(returncode=0, stdout=fuentes[ruta].encode("utf-8"))
         with mock.patch.object(mr.subprocess, "run", side_effect=git_show) as run:
-            texto = mr.obtener_contexto(diff, "abc123")
+            texto = mr.obtener_contexto(diff, "abc123", **opciones)
         for llamada in run.call_args_list:
             self.assertEqual(llamada.args[0][:2], ["git", "show"])   # nunca ejecuta el PR
         return texto
@@ -167,6 +167,29 @@ class TestContexto(unittest.TestCase):
         self.assertIn("Archivo no disponible en cabeza: borrado.py",
                       self.contexto(diff_de("borrado.py", 2, "x"), {}))
 
+    def test_cobertura_distingue_los_bloques_de_las_rutas_no_disponibles(self):
+        diff = (diff_de("a.py", N_RECORTA, "x") + diff_de("borrado.sh", 2, "x")
+                + diff_de("README.md", 3, "x"))
+        fuentes = {"a.py": FUENTE}
+        cobertura = {}
+        self.assertEqual(self.contexto(diff, fuentes, cobertura=cobertura),
+                         self.contexto(diff, fuentes))
+        self.assertEqual(cobertura, {"rutas_candidatas": 2, "rutas_con_contexto": 1,
+                                    "rutas_no_disponibles": 1, "recortado": False})
+
+    def test_cobertura_detecta_recortes_por_archivo_y_por_presupuesto_total(self):
+        diff = diff_de("a.py", N_RECORTA, "x")
+        fuentes = {"a.py": FUENTE}
+        for presupuesto, limite, con_contexto in (("MAX_ARCHIVO", 120, 1),
+                                                 ("MAX_CONTEXTO", 0, 0)):
+            with self.subTest(presupuesto=presupuesto), mock.patch.object(mr, presupuesto, limite):
+                cobertura = {}
+                self.assertEqual(self.contexto(diff, fuentes, cobertura=cobertura),
+                                 self.contexto(diff, fuentes))
+                self.assertEqual(cobertura, {"rutas_candidatas": 1,
+                    "rutas_con_contexto": con_contexto, "rutas_no_disponibles": 0,
+                    "recortado": True})
+
     def test_sin_sintaxis_valida_usa_ventanas(self):
         roto = "def roto(:\n" + "".join("linea %d\n" % i for i in range(100))
         texto = self.contexto(diff_de("roto.py", 50, "x"), {"roto.py": roto})
@@ -175,7 +198,7 @@ class TestContexto(unittest.TestCase):
 
 
 class TestGuia(unittest.TestCase):
-    def guia(self, archivos, entorno=None):
+    def guia(self, archivos, entorno=None, **opciones):
         with tempfile.TemporaryDirectory() as d:
             for nombre, texto in archivos.items():
                 with open(os.path.join(d, nombre), "w", encoding="utf-8") as fh:
@@ -183,7 +206,7 @@ class TestGuia(unittest.TestCase):
             with mock.patch.dict(os.environ, entorno or {}, clear=False):
                 if not entorno:
                     os.environ.pop("MISTRAL_GUIAS", None)
-                return mr.leer_guia(d)
+                return mr.leer_guia(d, **opciones)
 
     def test_la_guia_larga_cabe_entera(self):
         larga = "regla\n" * 6000 + "Gotchas conocidos\n"   # ~42.000, como CLAUDE.md
@@ -202,6 +225,16 @@ class TestGuia(unittest.TestCase):
         self.assertEqual(self.guia(todas, {"MISTRAL_GUIAS": "CLAUDE.md\nAGENTS.md"}),
                          ("CLAUDE.md", "c"))
         self.assertEqual(self.guia({}), (None, ""))
+
+    def test_cobertura_de_la_guia_sin_alterar_el_texto(self):
+        for estado, archivos in (("ausente", {}),
+                                  ("vacia", {"REVIEW.md": "", "AGENTS.md": "reglas"}),
+                                  ("completa", {"REVIEW.md": "reglas"}),
+                                  ("recortada", {"REVIEW.md": "reglas extra"})):
+            with self.subTest(estado=estado), mock.patch.object(mr, "MAX_GUIA", 6):
+                cobertura = {}
+                self.assertEqual(self.guia(archivos, cobertura=cobertura), self.guia(archivos))
+                self.assertEqual(cobertura, {"estado": estado})
 
 
 class TestPrompt(unittest.TestCase):

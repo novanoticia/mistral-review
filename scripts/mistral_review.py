@@ -240,17 +240,23 @@ def mask_secrets(texto):
     return re.sub(patron, ocultar, texto, flags=re.IGNORECASE)
 
 
-def leer_guia(raiz="."):
-    """Guía del proyecto: la primera de `guias()` que exista."""
+def leer_guia(raiz=".", *, cobertura=None):
+    """Lee la primera guía que exista y, opcionalmente, anota su estado."""
     for nombre in guias():
         ruta = os.path.join(raiz, nombre)
         if os.path.exists(ruta):
             with open(ruta, encoding="utf-8") as fh:
                 texto = fh.read(MAX_GUIA + 1)
+            estado = "completa" if texto else "vacia"
             if len(texto) > MAX_GUIA:
                 texto = texto[:MAX_GUIA] + (
                     "\n\n[Guía recortada a %d caracteres: faltan reglas.]" % MAX_GUIA)
+                estado = "recortada"
+            if cobertura is not None:
+                cobertura["estado"] = estado
             return nombre, texto
+    if cobertura is not None:
+        cobertura["estado"] = "ausente"
     return None, ""
 
 
@@ -469,7 +475,7 @@ def _es_test(ruta):
     return nombre.startswith("test_") or "/tests/" in "/" + ruta
 
 
-def obtener_contexto(diff, cabeza):
+def obtener_contexto(diff, cabeza, *, cobertura=None):
     """Funciones completas (versión nueva) que contienen los cambios.
 
     Solo fuentes y tests Python y shell: no leer configuraciones de
@@ -477,21 +483,27 @@ def obtener_contexto(diff, cabeza):
     Se lee con `git show`, sin ejecutar el PR. Primero el código y después
     los tests, para que el presupuesto no se gaste en estos. Cada archivo y
     el conjunto tienen un presupuesto visible, y se corta por líneas enteras.
+    Si se pide cobertura, anota recuentos y recortes sin copiar el texto.
     """
     cambios = lineas_cambiadas(diff)
+    candidatas = sorted((ruta for ruta in cambios if ruta.endswith((".py", ".sh"))),
+                        key=lambda r: (_es_test(r), r))
     partes = []
     restante = MAX_CONTEXTO
-    for ruta in sorted(cambios, key=lambda r: (_es_test(r), r)):
-        if not ruta.endswith((".py", ".sh")):
-            continue
+    rutas_con_contexto = 0
+    rutas_no_disponibles = 0
+    recortado = False
+    for ruta in candidatas:
         if restante <= 0:
             partes.append("Contexto adicional omitido: presupuesto agotado.")
+            recortado = True
             break
         # git show lee el objeto del commit, no enlaces del checkout.
         proc = subprocess.run(["git", "show", "%s:%s" % (cabeza, ruta)],
                               capture_output=True)
         if proc.returncode:
             partes.append("Archivo no disponible en cabeza: %s" % ruta)
+            rutas_no_disponibles += 1
             continue
         texto = proc.stdout.decode("utf-8", "replace")
         lineas = texto.split("\n")
@@ -513,6 +525,7 @@ def obtener_contexto(diff, cabeza):
                 usado += len(linea) + 1
             if len(cuerpo) < fin - inicio + 1:
                 omitidos.append(nombre or "líneas %d-%d" % (inicio, fin))
+                recortado = True
             if cuerpo:
                 usado += len(etiqueta) + 1
                 bloques.append(etiqueta + "\n" + "\n".join(cuerpo))
@@ -525,7 +538,13 @@ def obtener_contexto(diff, cabeza):
             ruta, (" (contexto recortado: %s)" % ", ".join(omitidos)[:300])
             if omitidos else "", "python" if python else "bash",
             "\n\n".join(bloques)))
+        rutas_con_contexto += 1
         restante -= usado
+    if cobertura is not None:
+        cobertura.update(rutas_candidatas=len(candidatas),
+                         rutas_con_contexto=rutas_con_contexto,
+                         rutas_no_disponibles=rutas_no_disponibles,
+                         recortado=recortado)
     return "\n\n".join(partes)
 
 

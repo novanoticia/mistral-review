@@ -128,6 +128,37 @@ distinto y la comparación pierde sentido. Que una configuración encuentre más
 defectos en una ejecución no prueba que sea mejor: hacen falta varias
 repeticiones y etiquetar los hallazgos a mano.
 
+El artefacto identifica los dos árboles de trabajo en `procedencia`. Las
+entradas `revisor` y `evaluado` registran el SHA de su commit en `commit` y
+si había modificaciones locales en `cambios_locales`. Un valor `null`
+indica que ese dato no pudo verificarse. Para el revisor se comprueban
+`mistral_review.py` y `mistral_eval.py`. Para el repo evaluado se comprueban
+los archivos versionados. Una evaluación local puede leer una guía sin
+versionar aunque `cambios_locales` sea `false`.
+
+Cada repetición registra las peticiones HTTP reales en `solicitudes` y la
+duración total en milisegundos en `duracion_ms`, desde la preparación hasta
+la validación, con los reintentos y sus esperas. `cobertura` describe mediante
+recuentos e indicadores la entrada que se preparó, incluso si falla la petición.
+
+- `diff` cuenta las rutas tras aplicar exclusiones (`rutas_disponibles`), las
+  rutas con cambios textuales (`rutas_con_cambios`) y las que tienen al menos
+  una línea añadida o eliminada completa en el prefijo preparado
+  (`rutas_con_cambios_visibles`). `rutas_sin_cambios_textuales` cuenta rutas
+  del inventario que pueden aportar solo cabeceras, como binarios, cambios de
+  modo y renombrados sin cambios de contenido. `lineas_de_cambio` cuenta las
+  líneas añadidas o eliminadas del diff y `lineas_de_cambio_visibles` las
+  líneas completas del prefijo. `recortado` indica si se aplicó el límite
+  del diff y `linea_final_incompleta` si el prefijo quedó cortado dentro de
+  una línea.
+- `guia.estado` indica si la guía estaba `ausente`, `vacia`, `completa` o
+  `recortada`.
+- `contexto` cuenta los archivos Python y shell candidatos a partir del
+  prefijo del diff (`rutas_candidatas`), aquellos para los que se preparó
+  contexto (`rutas_con_contexto`) y aquellos que no pudieron leerse
+  (`rutas_no_disponibles`). Su indicador `recortado` señala que se recortó u
+  omitió contexto por los límites de tamaño.
+
 **Coste.** Cada revisión admite hasta dos intentos de respuesta. Se usa el
 segundo si la primera se corta por `length` o el validador la rechaza. Con
 `mistral-large-latest` y razonamiento, del orden de 10.000
