@@ -22,7 +22,7 @@ jobs:
     uses: novanoticia/mistral-review/.github/workflows/review.yml@main
     with:
       # Versión del revisor: `@` de `uses:` y `ref:` deben coincidir. Para fijar
-      # una versión estable, cambia las dos a la vez (p. ej. `@v1.4` y `ref: v1.4`).
+      # una versión estable, cambia las dos a la vez (p. ej. `@v1.5` y `ref: v1.5`).
       ref: main
       # Proveedor (ver README, «Usar OpenRouter»): sin la variable MISTRAL_PROVIDER,
       # o con `mistral`, revisa Mistral con MISTRAL_MODEL; con `openrouter`, OpenRouter

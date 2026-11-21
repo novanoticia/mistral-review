@@ -40,7 +40,7 @@ jobs:
     uses: novanoticia/mistral-review/.github/workflows/eval.yml@main
     with:
       # Versión del revisor: `@` de `uses:` y `ref:` deben coincidir. Para fijar
-      # una versión estable, cambia las dos a la vez (p. ej. `@v1.4` y `ref: v1.4`).
+      # una versión estable, cambia las dos a la vez (p. ej. `@v1.5` y `ref: v1.5`).
       ref: main
       repeticiones: ${{ inputs.repeticiones }}
       solo: ${{ inputs.solo }}

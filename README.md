@@ -33,7 +33,7 @@ Todo desde la web de GitHub, en el repo que quieres revisar:
    [`ejemplos/mistral-review.yml`](ejemplos/mistral-review.yml).
 2. **Fija la versión (recomendado).** En ese archivo cambia `@main` por la
    última [versión publicada](https://github.com/novanoticia/mistral-review/releases)
-   (por ejemplo `@v1.4`) y `ref: main` por la misma etiqueta (`ref: v1.4`).
+   (por ejemplo `@v1.5`) y `ref: main` por la misma etiqueta (`ref: v1.5`).
    Las dos siempre iguales. Pulsa **Commit changes…**.
 3. **Añade la clave.** **Settings → Secrets and variables → Actions →
    pestaña Secrets → New repository secret**: nombre `MISTRAL_API_KEY`,
@@ -218,7 +218,7 @@ versión del script se ejecuta. **Deben ser iguales**; si no, se mezclan dos
 versiones.
 
 - Con `@main` el repo recibe cada cambio de aquí en su próxima ejecución.
-- Con una etiqueta (`@v1.4`), solo cuando tú la cambies. Es lo recomendable.
+- Con una etiqueta (`@v1.5`), solo cuando tú la cambies. Es lo recomendable.
 
 ### Comprobar o fijar la versión del revisor
 
@@ -287,7 +287,7 @@ de la rama del PR; ese cambio se revisa a mano.
 ### Al publicar una versión
 
 Los repos que fijan una etiqueta no reciben la versión nueva hasta que se
-cambie a mano. Tras publicar la *release* (por ejemplo `v1.5`), en cada archivo
+cambie a mano. Tras publicar la *release* (por ejemplo `v1.6`), en cada archivo
 de esta lista cambia lo que va tras `@` en `uses:` y el valor de `ref:` a la
 nueva etiqueta, las dos a la vez:
 
@@ -300,7 +300,7 @@ nueva etiqueta, las dos a la vez:
 | `repo-auditor-ia` | `mistral-review.yml`, `mistral-reply.yml` |
 
 Para comprobar que no queda ninguna referencia antigua en un repo, busca la
-etiqueta anterior (por ejemplo `v1.4`) en su carpeta `.github/`. En este repo,
+etiqueta anterior (por ejemplo `v1.5`) en su carpeta `.github/`. En este repo,
 `test_los_workflows_propios_fijan_la_misma_version` falla si `uses:` y `ref:`
 no coinciden o si los dos workflows apuntan a versiones distintas. Si añades
 el revisor a un repo nuevo, añádelo también a esta tabla.
