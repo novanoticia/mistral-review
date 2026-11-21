@@ -293,6 +293,22 @@ class TestRevisar(unittest.TestCase):
                     "lineas_de_cambio": 2, "lineas_de_cambio_visibles": lineas_visibles,
                     "recortado": recortado, "linea_final_incompleta": recortado})
 
+    def test_cita_fuera_del_recorte_deja_comprobacion_pendiente_sin_repetir(self):
+        dif_b = ("diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n"
+                 "@@ -1 +1 @@\n-valor = 0\n+valor = 1\n")
+        texto = json.dumps({"resumen": "R", "hallazgos": [HALLAZGO], "comprobaciones": [
+            dict(COMPROBACIONES[0], estado="revisado", fragmento=HALLAZGO["fragmento"]),
+            dict(COMPROBACIONES[0], archivo="b.py", estado="revisado", fragmento="valor = 1")]})
+        with mock.patch.object(mr, "MAX_DIFF", len(DIFF)):
+            registro, api = self.revisar([texto], diff=DIFF + dif_b, rutas={"a.py", "b.py"})
+        self.assertEqual(registro["estado"], "valida")
+        api.assert_called_once()
+        self.assertEqual(registro["rechazadas"], [])
+        self.assertEqual(registro["hallazgos"], [dict(HALLAZGO, donde="funcion")])
+        self.assertEqual(len(registro["pendientes"]), 1)
+        self.assertEqual(registro["pendientes"][0]["archivo"], "b.py")
+        self.assertIn("Falta una cita verificable", registro["pendientes"][0]["conclusion"])
+
     def test_objetivo_fuera_del_recorte_conserva_la_revision_y_el_hallazgo(self):
         referencia = ("diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n"
                       "@@ -1 +1 @@\n-x = 0\n+x = 1\n")

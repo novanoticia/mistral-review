@@ -540,6 +540,7 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta="", *, contexto_modo=
                 "cita_directa_visible": _cita_directa_visible(prefijo, destino),
                 "cobertura": {"diff": cobertura_diff, "guia": cobertura_guia,
                               "contexto": cobertura_contexto}}
+    comprobaciones = []
     try:
         for solicitud in range(1, mr.INTENTOS_RESPUESTA + 1):
             registro["solicitudes"] += 1
@@ -555,7 +556,7 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta="", *, contexto_modo=
             diagnostico = []
             resultado = mr.interpretar(texto, prefijo,
                 exigir_comprobaciones=True, rutas_comprobaciones=rutas,
-                diagnostico=diagnostico)
+                diagnostico=diagnostico, comprobaciones_validadas=comprobaciones)
             registro["detalle"] = ", ".join(diagnostico)
             if resultado is not None:
                 break
@@ -585,7 +586,7 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta="", *, contexto_modo=
     for h in resultado[1]:
         donde = clasificar(h, prefijo, destino)
         registro["hallazgos"].append(dict(_campos_filtrados(h, CAMPOS_HALLAZGO), donde=donde))
-    for c in json.loads(texto)["comprobaciones"]:
+    for c in comprobaciones:
         if c["estado"] == "pendiente":
             donde = "archivo" if c["archivo"] in destino else "fuera"
             registro["pendientes"].append(dict(_campos_filtrados(c, CAMPOS_PENDIENTE), donde=donde))

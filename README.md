@@ -14,11 +14,17 @@ comprobarlos antes de actuar.
 - Lee el diff del PR con Git (nunca ejecuta su código), la guía del proyecto
   (`REVIEW.md`, `AGENTS.md` o `CLAUDE.md`) y las funciones completas, Python y
   shell, que contienen los cambios.
+- Envía al proveedor el título y ese material de revisión. La revisión
+  automática omite la descripción del PR.
 - Tacha secretos evidentes (`api_key = …`, `token: …`, `password=…`) antes de
   enviar nada a Mistral y antes de publicar.
 - Pide un JSON con hallazgos (archivo, cita literal, escenario, arreglo) y de 1
-  a 6 comprobaciones. Una cita vale si es una línea completa del diff o varias
-  líneas seguidas de un mismo hunk; si no, la revisión se rechaza.
+  a 6 comprobaciones. Cada hallazgo debe citar una línea completa del diff o
+  varias líneas seguidas de un mismo bloque de cambios. Una cita inválida de
+  un hallazgo hace que se rechace la respuesta.
+- Cada comprobación «revisado» cita una línea añadida o eliminada completa de
+  su archivo en el diff enviado. Si falta una cita válida, la comprobación
+  queda «pendiente» y se conservan los demás resultados válidos.
 - Si la respuesta llega mal formada o cortada por `length`, la pide una vez más.
   Si la segunda tampoco vale, el comentario nombra la regla incumplida (solo su
   código, nunca el contenido de la respuesta).
@@ -195,8 +201,9 @@ Fijo, no se elige:
 
 ### Privacidad, costes y límites
 
-- **Privacidad.** El diff, la guía y el contexto del PR pasan por **dos
-  empresas**: OpenRouter y el proveedor final, cada una con sus condiciones.
+- **Privacidad.** El título, el diff, la guía y el contexto del PR pasan por
+  **dos empresas**: OpenRouter y el proveedor final, cada una con sus
+  condiciones.
   `data_collection: "deny"` filtra según lo que OpenRouter sabe de cada
   proveedor, que según su propia documentación no es definitivo. Los secretos
   evidentes se tachan antes de enviar, igual que con Mistral.

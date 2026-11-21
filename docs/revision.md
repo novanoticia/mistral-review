@@ -43,6 +43,15 @@ espacios, hasta agotar el margen, y la misma revisión relanzada salió bien
 (repo-auditor-ia#26). Los demás cortes (`model_length`, `error`) no se
 repiten: no mejoran pidiendo otra vez.
 
+**Plazo total de la revisión de PR.** La preparación, las peticiones al
+proveedor y las pausas de los reintentos comparten un plazo de 12 minutos
+desde el inicio del script. Cada espera de red se limita al menor valor
+entre 180 segundos y el tiempo restante. El temporizador del ejecutor Linux
+también puede interrumpir la lectura de una respuesta. Si se agota el plazo
+o una pausa ya no cabe en él, el check falla y guarda el motivo en el resumen
+de Actions antes de intentar publicar el comentario. El job completo dispone
+de 15 minutos, incluida su preparación anterior al script.
+
 **Razonamiento bajo.** `mistral-large-latest` pasó a razonar antes de
 responder y devuelve el contenido en bloques (`thinking` y `text`). En el email-triage-plugin#202, con un margen de 8.000 tokens, los gastó en razonar y no escribió nada:
 esa era la causa de los informes «no completada». Con razonamiento bajo usó
@@ -67,7 +76,8 @@ Actions, y si no se puede leer el historial se revisa igualmente.
 - Guía `REVIEW.md`, o `CLAUDE.md` si no existe la primera; máximo 60.000
   caracteres, que hoy cubren `CLAUDE.md` entero (con 20.000 se quedaba fuera
   casi la mitad). Si algún día se recorta, el modelo recibe el aviso.
-- Título, descripción y diff con diez líneas de contexto, hasta 150.000 caracteres.
+- Título y diff con diez líneas de contexto, hasta 150.000 caracteres de diff.
+  La revisión automática omite la descripción del PR.
 - Contexto de los archivos Python cambiados, leído con `git show` del commit:
   **las funciones completas de la versión nueva que contienen las líneas
   cambiadas**, con sus números de línea (un método va sin el resto de su
@@ -79,8 +89,14 @@ Actions, y si no se puede leer el historial se revisa igualmente.
   cada archivo, que en `triage_helpers.py` era solo el docstring.
 - Entre una y seis comprobaciones con archivo, escenario, conclusión y estado
   `revisado` o `pendiente`. Son razonamientos por lectura, no pruebas ejecutadas.
-  Sus rutas se contrastan con el inventario de Git, incluidos renombrados puros,
-  cambios de permisos y binarios sin hunks. Esto no valida la verdad del análisis.
+  El inventario de Git valida la ruta. `revisado` exige que `fragmento` cite
+  una línea añadida o eliminada completa del mismo archivo en el diff enviado.
+  El informe muestra la cita que supera la comprobación. Si falta o no
+  coincide, el revisor marca el caso `pendiente` y explica el motivo. Así
+  también se tratan los casos sin líneas de cambio visibles, como renombrados
+  puros, cambios de permisos y binarios. La regla se aplica también a las
+  nuevas evaluaciones históricas. La cita acredita la ubicación. La conclusión
+  sigue siendo un juicio del modelo.
 - Hallazgos solo con escenario concreto y una cita literal del diff del archivo.
   Se admite que no haya hallazgos; una respuesta sin comprobaciones es inválida.
 - La cita es una línea completa del diff (sangría y prefijo libres) o, desde

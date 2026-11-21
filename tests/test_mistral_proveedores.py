@@ -250,7 +250,7 @@ class TestMainConProveedor(unittest.TestCase):
         self.assertEqual(codigo, 0)
         args, kwargs = llamar.call_args
         self.assertEqual(args[1:], ("z-ai/glm-5.3-flash", CLAVE_OR))
-        self.assertEqual(kwargs, {"proveedor": "openrouter", "ruta": "z-ai"})
+        self.assertEqual(kwargs, {"proveedor": "openrouter", "ruta": "z-ai", "plazo": mock.ANY})
         self.assertIn("## Revisión vía OpenRouter (`z-ai/glm-5.3-flash`, proveedor `z-ai`)",
                       cuerpo)
         self.assertNotIn("mistralai", cuerpo)
@@ -260,7 +260,7 @@ class TestMainConProveedor(unittest.TestCase):
             {"MISTRAL_API_KEY": CLAVE_MI}, respuesta=self.VALIDA)
         self.assertEqual(codigo, 0)
         self.assertEqual(llamar.call_args.args[1:], (mr.MODELO, CLAVE_MI))
-        self.assertEqual(llamar.call_args.kwargs, {"proveedor": "mistral", "ruta": ""})
+        self.assertEqual(llamar.call_args.kwargs, {"proveedor": "mistral", "ruta": "", "plazo": mock.ANY})
         self.assertIn("[Mistral AI (@mistralai)](https://github.com/mistralai)", cuerpo)
 
     def test_falta_la_clave_del_proveedor_elegido(self):
@@ -595,6 +595,13 @@ class TestWorkflowsConProveedor(unittest.TestCase):
                 # La clave solo llega al paso que llama a la API.
                 otros = [p for p in flujo["jobs"][trabajo]["steps"] if p is not paso]
                 self.assertFalse(any("OPENROUTER_API_KEY" in json.dumps(p) for p in otros))
+
+    def test_el_workflow_de_revision_no_expone_opcion_para_enviar_descripcion(self):
+        flujo = self.cargar(".github/workflows/review.yml")
+        self.assertNotIn("include_description", flujo[True]["workflow_call"]["inputs"])
+        paso = next(p for p in flujo["jobs"]["mistral-review"]["steps"]
+                    if "mistral_review.py" in p.get("run", ""))
+        self.assertNotIn("MISTRAL_INCLUIR_DESCRIPCION", paso["env"])
 
     def test_los_ejemplos_pasan_entradas_y_secretos_que_existen(self):
         for ejemplo, nombre in (("mistral-review.yml", "review.yml"),

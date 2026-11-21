@@ -10,6 +10,7 @@ import urllib.error
 import importlib.util
 import json
 import os
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -26,7 +27,7 @@ HALLAZGO = {"severidad": "media", "archivo": "a.py", "fragmento": "x = `1`",
             "arreglo": "conservar la marca"}
 COMPROBACION = {"archivo": "a.py", "escenario": "entrada vacía",
                "conclusion": "la guarda devuelve error antes de escribir",
-               "estado": "revisado"}
+               "estado": "revisado", "fragmento": "x = `1`"}
 
 
 class TestDiff(unittest.TestCase):
@@ -256,6 +257,39 @@ class TestAPI(unittest.TestCase):
             self.assertEqual(abrir.call_count, 1)
             dormir.assert_not_called()
 
+    def test_retry_after_que_no_cabe_en_el_plazo_no_espera_ni_reintenta(self):
+        error = self.error(429, headers={"Retry-After": "15"})
+        with mock.patch.object(mr.time, "monotonic", return_value=100), \
+                mock.patch.object(mr.urllib.request, "urlopen", side_effect=error) as abrir, \
+                mock.patch.object(mr.time, "sleep") as dormir:
+            with self.assertRaisesRegex(mr.PlazoRevisionAgotado, "la espera del reintento"):
+                mr.llamar_mistral([], "m", "clave", plazo=110)
+        abrir.assert_called_once()
+        self.assertEqual(abrir.call_args.kwargs["timeout"], 10)
+        dormir.assert_not_called()
+
+    def test_reintento_http_usa_el_tiempo_que_queda_del_mismo_plazo(self):
+        respuestas = [self.error(429, headers={"Retry-After": "3"}), self.respuesta()]
+        with mock.patch.object(mr.time, "monotonic", side_effect=[100, 105, 108, 109]), \
+                mock.patch.object(mr.urllib.request, "urlopen", side_effect=respuestas) as abrir, \
+                mock.patch.object(mr.time, "sleep") as dormir:
+            self.assertEqual(mr.llamar_mistral([], "m", "clave", plazo=110), "{}")
+        dormir.assert_called_once_with(3)
+        self.assertEqual([llamada.kwargs["timeout"] for llamada in abrir.call_args_list], [10, 2])
+
+    @unittest.skipUnless(hasattr(signal, "setitimer"), "requiere temporizador POSIX")
+    def test_el_plazo_corta_una_lectura_bloqueada_sin_reintentar(self):
+        respuesta = self.respuesta()
+        respuesta.__enter__.return_value.read.side_effect = lambda: signal.raise_signal(signal.SIGALRM)
+        plazo = mr.time.monotonic() + 60
+        manejador = signal.getsignal(signal.SIGALRM)
+        with mock.patch.object(mr.urllib.request, "urlopen", return_value=respuesta) as abrir, \
+                self.assertRaises(mr.PlazoRevisionAgotado), mr._limitar_revision(plazo):
+            mr.llamar_mistral([], "m", "clave", plazo=plazo)
+        abrir.assert_called_once()
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+        self.assertEqual(signal.getsignal(signal.SIGALRM), manejador)
+
     def test_fallback_comparte_el_limite_de_tres_solicitudes(self):
         with mock.patch.object(mr.urllib.request, "urlopen", side_effect=[
                 self.error(503), self.error(400, "json_object is unsupported"),
@@ -302,6 +336,41 @@ class TestMain(unittest.TestCase):
         publicar.assert_called_once()
         return codigo, publicar.call_args.args[2]
 
+    def test_la_peticion_omite_la_descripcion_del_pr(self):
+        titulo = "Título de prueba"
+        descripcion = "Descripción ficticia del PR"
+        evento = json.dumps({"pull_request": {
+            "number": 7, "base": {"sha": "base"}, "head": {"sha": "abc123"},
+            "title": titulo, "body": descripcion}})
+        resultado = json.dumps({"resumen": "R", "hallazgos": [],
+                                "comprobaciones": [COMPROBACION]})
+        respuesta = json.dumps({"choices": [{"message": {"content": resultado},
+                                             "finish_reason": "stop"}]}).encode()
+        for proveedor, modelo in (("mistral", mr.MODELO), ("openrouter", "pruebas/modelo")):
+            variables = {"GITHUB_EVENT_PATH": "evento.json", "GITHUB_REPOSITORY": "o/r",
+                         "MISTRAL_PROVEEDOR": proveedor, "MISTRAL_MODEL": modelo,
+                         mr.PROVEEDORES[proveedor]["secreto"]: "clave-ficticia",
+                         # Una variable heredada tampoco habilita la opción retirada.
+                         "MISTRAL_INCLUIR_DESCRIPCION": "true"}
+            with self.subTest(proveedor=proveedor), \
+                    mock.patch.dict(os.environ, variables, clear=True), \
+                    mock.patch("builtins.open", mock.mock_open(read_data=evento)), \
+                    mock.patch.object(mr, "obtener_diff", return_value=self.DIFF), \
+                    mock.patch.object(mr, "obtener_rutas_diff", return_value={"a.py"}), \
+                    mock.patch.object(mr, "leer_guia", return_value=("REVIEW.md", "Regla de prueba")), \
+                    mock.patch.object(mr, "obtener_contexto", return_value="Contexto de prueba"), \
+                    mock.patch.object(mr.urllib.request, "urlopen",
+                                      return_value=io.BytesIO(respuesta)) as abrir, \
+                    mock.patch.object(mr, "publicar"), mock.patch("builtins.print"):
+                self.assertEqual(mr.main(), 0)
+                abrir.assert_called_once()
+                peticion = abrir.call_args.args[0]
+                self.assertEqual(peticion.full_url, mr.PROVEEDORES[proveedor]["api"])
+                mensajes = json.loads(peticion.data)["messages"]
+                self.assertTrue(all(descripcion not in mensaje["content"] for mensaje in mensajes))
+                for texto in (titulo, "Regla de prueba", "Contexto de prueba", "+x = `1`"):
+                    self.assertIn(texto, mensajes[1]["content"])
+
     def test_respuesta_invalida_publica_aviso_y_falla_el_check(self):
         for texto, codigo in (("no json", 1),
                 (json.dumps({"resumen": "R", "hallazgos": []}), 0),
@@ -330,6 +399,23 @@ class TestMain(unittest.TestCase):
                 self.assertNotIn("Sin hallazgos", cuerpo)
                 self.assertNotIn("sustituye", cuerpo)
 
+    def test_reintento_por_corte_comparte_plazo_y_deja_resumen_al_agotarse(self):
+        plazos = []
+
+        def responder(*args, plazo, **kwargs):
+            plazos.append(plazo)
+            if len(plazos) == 1:
+                raise mr.RespuestaIncompleta("length")
+            raise mr.PlazoRevisionAgotado()
+
+        with mock.patch.object(mr.time, "monotonic", return_value=100), \
+                mock.patch.object(mr, "escribir_resumen") as resumen:
+            codigo, cuerpo = self.ejecutar(fallo=responder)
+        self.assertEqual(plazos, [100 + mr.TIEMPO_MAX_REVISION] * 2)
+        self.assertEqual(codigo, 1)
+        self.assertIn("se agotó el plazo total de la revisión", cuerpo)
+        resumen.assert_called_once_with(cuerpo)
+
     def test_cada_intento_del_mismo_commit_identifica_su_ejecucion_en_todos_los_estados(self):
         for intento in ("1", "2"):
             for respuesta, fallo in ((json.dumps({"resumen": "R", "hallazgos": []}), None),
@@ -353,6 +439,47 @@ class TestMain(unittest.TestCase):
                 {"resumen": "R", "hallazgos": [HALLAZGO]}))
         self.assertEqual(codigo, 1)
         self.assertIn("Revisión no válida", cuerpo)
+
+    def test_una_cita_recortada_deja_la_comprobacion_pendiente(self):
+        diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+                "@@ -1 +1,3 @@\n contexto = 0\n+visible = 1\n+recortado = 2\n")
+        respuesta = {"resumen": "R", "hallazgos": [], "comprobaciones": [
+            dict(COMPROBACION, fragmento="recortado = 2")]}
+        with mock.patch.object(self, "DIFF", diff), mock.patch.object(mr, "MAX_DIFF", len(diff) - 1):
+            codigo, cuerpo = self.ejecutar(json.dumps(respuesta))
+        self.assertEqual(codigo, 0)
+        self.assertIn("Comprobaciones por lectura pendientes (1)", cuerpo)
+        self.assertNotIn("recortado = 2", cuerpo)
+
+    def test_el_informe_solo_muestra_citas_de_cambios_del_archivo_indicado(self):
+        diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+                "@@ -1,2 +1,3 @@\n contexto = True\n-x = 0\n+x = `1`\n+password=dato-ficticio\n"
+                "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n"
+                "@@ -0,0 +1 @@\n+otro_archivo = True\n")
+        casos = (("+x = `1`", True), ("x = 0", True), (None, False), ([], False),
+                 ("x = `", False), ("contexto = True", False), ("otro_archivo = True", False),
+                 ("password=***", True), ("password=dato-ficticio", False),
+                 ("x = 0\nx = `1`", False))
+        for fragmento, valida in casos:
+            comprobacion = dict(COMPROBACION)
+            if fragmento is None:
+                del comprobacion["fragmento"]
+            else:
+                comprobacion["fragmento"] = fragmento
+            respuesta = {"resumen": "R", "hallazgos": [], "comprobaciones": [comprobacion]}
+            with self.subTest(fragmento=fragmento), mock.patch.object(self, "DIFF", diff):
+                codigo, cuerpo = self.ejecutar(json.dumps(respuesta))
+                self.assertEqual(codigo, 0)
+                self.assertNotIn("dato-ficticio", cuerpo)
+                if valida:
+                    self.assertIn("**revisado**", cuerpo)
+                    self.assertIn("Fragmento: " + mr._codigo(fragmento), cuerpo)
+                    self.assertIn(COMPROBACION["conclusion"], cuerpo)
+                else:
+                    self.assertIn("**pendiente**", cuerpo)
+                    self.assertIn("Falta una cita verificable", cuerpo)
+                    self.assertNotIn("Fragmento", cuerpo)
+                    self.assertNotIn(COMPROBACION["conclusion"], cuerpo)
 
     def test_diff_vacio_no_consulta_api_ni_exige_casos_inventados(self):
         with mock.patch.object(self, "DIFF", ""):
