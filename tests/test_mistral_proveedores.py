@@ -616,6 +616,8 @@ class TestWorkflowsConProveedor(unittest.TestCase):
                 # Cada proveedor, su variable de modelo: OpenRouter nunca toma
                 # MISTRAL_MODEL (sin OPENROUTER_MODEL, el revisor falla y lo dice).
                 self.assertEqual(trabajo["with"]["model"], "${{ vars.MISTRAL_PROVIDER == \'openrouter\' && vars.OPENROUTER_MODEL || vars.MISTRAL_PROVIDER != \'openrouter\' && vars.MISTRAL_MODEL || \'\' }}")
+                # El workflow y el script salen de la misma versión del revisor.
+                self.assertEqual(trabajo["uses"].rsplit("@", 1)[1], trabajo["with"]["ref"])
 
 
 if __name__ == "__main__":
