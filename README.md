@@ -259,6 +259,12 @@ variable `MISTRAL_REPLY_MODEL` para probar otro modelo de Mistral solo aquí
 puede lanzar a mano (**Actions → Mistral Reply to AI Reviews → Run workflow**)
 con el número del PR y el id del comentario.
 
+Este repo lo usa en sus propios PR con
+[`.github/workflows/mistral-reply.yml`](.github/workflows/mistral-reply.yml),
+fijado en la última versión estable y no en la rama del PR: así el código sin
+fusionar nunca se ejecuta con la clave. Sin el secreto `MISTRAL_API_KEY` en
+este repo, el contraste se omite y lo indica en el resumen de Actions.
+
 Procede de `email-triage-plugin`; su historia y sus límites están en el
 docstring de [`scripts/mistral_reply.py`](scripts/mistral_reply.py).
 
