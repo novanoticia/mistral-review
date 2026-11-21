@@ -331,6 +331,20 @@ class TestLecturaGitMistral(unittest.TestCase):
                 returncode=0, stdout=b"\0binario")):
             self.assertIsNone(reply.fragmento_git(SHA, "a.bin", 1))
 
+    def test_un_salto_de_pagina_no_desplaza_las_lineas_ni_el_tachado_pem(self):
+        # `splitlines()` también partía por `\x0c`: la numeración no era la de
+        # git y el tachado conjunto caía al de línea a línea (revisión de
+        # Mistral de mistral-review#24).
+        cuerpo = "MIIEow" + "IBAAKCAQEA" * 4
+        fuente = ("def a():\n    return 1\n\x0c\ndef b():\n    return 2\n"
+                  'K = """-----BEGIN ' + "PRIVATE KEY-----\n%s\n-----END PRIVATE KEY-----\"\"\"\n" % cuerpo)
+        with mock.patch.object(reply.subprocess, "run", return_value=mock.Mock(
+                returncode=0, stdout=fuente.encode("utf-8"))):
+            fragmento = reply.fragmento_git(SHA, "a.py", 4)
+        self.assertNotIn(cuerpo, fragmento["texto"])
+        # La línea 4 de git es `def b():`; con `splitlines()` era la 5.
+        self.assertEqual(fragmento["texto"].split("\n")[4 - fragmento["desde"]], "def b():")
+
     def test_el_contraste_no_envia_la_descripcion_del_pr(self):
         descripcion = "Descripcion" + "PrivadaDelAutor"
         with mock.patch.object(mr, "obtener_diff", return_value=""), \
