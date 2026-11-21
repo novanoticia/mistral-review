@@ -1303,9 +1303,7 @@ def main():
                 resultado = ("No hay diff revisable tras excluir archivos generados; "
                              "no se ha consultado a %s." % nombre, [])
             else:
-                incluir_descripcion = os.environ.get("MISTRAL_INCLUIR_DESCRIPCION") == "true"
-                descripcion = pr.get("body") if incluir_descripcion else None
-                mensajes, recortado = construir_mensajes(pr.get("title"), descripcion,
+                mensajes, recortado = construir_mensajes(pr.get("title"), None,
                     diff, leer_guia(), obtener_contexto(diff[:MAX_DIFF], pr["head"]["sha"]))
                 rutas = obtener_rutas_diff(pr["base"]["sha"], pr["head"]["sha"])
                 for solicitud in range(1, INTENTOS_RESPUESTA + 1):

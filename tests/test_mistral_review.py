@@ -336,50 +336,40 @@ class TestMain(unittest.TestCase):
         publicar.assert_called_once()
         return codigo, publicar.call_args.args[2]
 
-    def test_la_peticion_solo_incluye_descripcion_si_se_habilita(self):
+    def test_la_peticion_omite_la_descripcion_del_pr(self):
         titulo = "Título de prueba"
         descripcion = "Descripción ficticia del PR"
-        final = "fin-de-la-descripción"
         evento = json.dumps({"pull_request": {
             "number": 7, "base": {"sha": "base"}, "head": {"sha": "abc123"},
-            "title": titulo, "body": f"{descripcion}\npassword=valor-ficticio\n"
-                                     + "." * 4000 + final}})
+            "title": titulo, "body": descripcion}})
         resultado = json.dumps({"resumen": "R", "hallazgos": [],
                                 "comprobaciones": [COMPROBACION]})
         respuesta = json.dumps({"choices": [{"message": {"content": resultado},
                                              "finish_reason": "stop"}]}).encode()
         for proveedor, modelo in (("mistral", mr.MODELO), ("openrouter", "pruebas/modelo")):
-            for opcion in (None, "false", "1", "true"):
-                variables = {"GITHUB_EVENT_PATH": "evento.json", "GITHUB_REPOSITORY": "o/r",
-                             "MISTRAL_PROVEEDOR": proveedor, "MISTRAL_MODEL": modelo,
-                             mr.PROVEEDORES[proveedor]["secreto"]: "clave-ficticia"}
-                if opcion is not None:
-                    variables["MISTRAL_INCLUIR_DESCRIPCION"] = opcion
-                with self.subTest(proveedor=proveedor, opcion=opcion), \
-                        mock.patch.dict(os.environ, variables, clear=True), \
-                        mock.patch("builtins.open", mock.mock_open(read_data=evento)), \
-                        mock.patch.object(mr, "obtener_diff", return_value=self.DIFF), \
-                        mock.patch.object(mr, "obtener_rutas_diff", return_value={"a.py"}), \
-                        mock.patch.object(mr, "leer_guia", return_value=("REVIEW.md", "Regla de prueba")), \
-                        mock.patch.object(mr, "obtener_contexto", return_value="Contexto de prueba"), \
-                        mock.patch.object(mr.urllib.request, "urlopen",
-                                          return_value=io.BytesIO(respuesta)) as abrir, \
-                        mock.patch.object(mr, "publicar"), mock.patch("builtins.print"):
-                    self.assertEqual(mr.main(), 0)
-                    abrir.assert_called_once()
-                    peticion = abrir.call_args.args[0]
-                    self.assertEqual(peticion.full_url, mr.PROVEEDORES[proveedor]["api"])
-                    mensaje = json.loads(peticion.data)["messages"][1]["content"]
-                    for texto in (titulo, "Regla de prueba", "Contexto de prueba", "+x = `1`"):
-                        self.assertIn(texto, mensaje)
-                    self.assertNotIn("valor-ficticio", mensaje)
-                    self.assertNotIn(final, mensaje)
-                    if opcion == "true":
-                        self.assertIn(descripcion, mensaje)
-                        self.assertIn("password=***", mensaje)
-                    else:
-                        self.assertNotIn(descripcion, mensaje)
-                        self.assertNotIn("password=", mensaje)
+            variables = {"GITHUB_EVENT_PATH": "evento.json", "GITHUB_REPOSITORY": "o/r",
+                         "MISTRAL_PROVEEDOR": proveedor, "MISTRAL_MODEL": modelo,
+                         mr.PROVEEDORES[proveedor]["secreto"]: "clave-ficticia",
+                         # Una variable heredada tampoco habilita la opción retirada.
+                         "MISTRAL_INCLUIR_DESCRIPCION": "true"}
+            with self.subTest(proveedor=proveedor), \
+                    mock.patch.dict(os.environ, variables, clear=True), \
+                    mock.patch("builtins.open", mock.mock_open(read_data=evento)), \
+                    mock.patch.object(mr, "obtener_diff", return_value=self.DIFF), \
+                    mock.patch.object(mr, "obtener_rutas_diff", return_value={"a.py"}), \
+                    mock.patch.object(mr, "leer_guia", return_value=("REVIEW.md", "Regla de prueba")), \
+                    mock.patch.object(mr, "obtener_contexto", return_value="Contexto de prueba"), \
+                    mock.patch.object(mr.urllib.request, "urlopen",
+                                      return_value=io.BytesIO(respuesta)) as abrir, \
+                    mock.patch.object(mr, "publicar"), mock.patch("builtins.print"):
+                self.assertEqual(mr.main(), 0)
+                abrir.assert_called_once()
+                peticion = abrir.call_args.args[0]
+                self.assertEqual(peticion.full_url, mr.PROVEEDORES[proveedor]["api"])
+                mensajes = json.loads(peticion.data)["messages"]
+                self.assertTrue(all(descripcion not in mensaje["content"] for mensaje in mensajes))
+                for texto in (titulo, "Regla de prueba", "Contexto de prueba", "+x = `1`"):
+                    self.assertIn(texto, mensajes[1]["content"])
 
     def test_respuesta_invalida_publica_aviso_y_falla_el_check(self):
         for texto, codigo in (("no json", 1),
