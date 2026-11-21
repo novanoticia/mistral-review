@@ -189,7 +189,12 @@ def fragmento_git(sha, ruta, linea):
     if salida.returncode or b"\0" in salida.stdout:
         return None
     texto = salida.stdout.decode("utf-8", "replace")
-    lineas = texto.splitlines()
+    # Solo `\n` separa líneas, como en git y en `mask_secrets`: `splitlines()`
+    # también parte por `\x0c`, `\x85` o `\u2028`, desplazaba la numeración y
+    # hacía caer el tachado conjunto al de línea a línea (revisión de Mistral
+    # de mistral-review#24). El `\r` de un final CRLF se quita como antes.
+    cuerpo = texto[:-1] if texto.endswith("\n") else texto
+    lineas = [l[:-1] if l.endswith("\r") else l for l in cuerpo.split("\n")] if texto else []
     # Lo que se envía y lo que valida las citas sale de las mismas líneas
     # tachadas (revisión Codex, mistral-review#3): el AST usa el original solo
     # para encontrar la función. Se tacha el texto entero, no línea a línea:

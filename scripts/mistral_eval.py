@@ -301,7 +301,9 @@ def cargar_casos(ruta):
         for clave in claves:
             if not c.get(clave):
                 raise ValueError("caso %s: falta %s" % (c.get("id"), clave))
-        for clave in ("archivos", "ignorar"):
+        if "archivos_objetivo" in c and c["tipo"] != "positivo":
+            raise ValueError("caso %s: archivos_objetivo solo admite un positivo" % c["id"])
+        for clave in ("archivos", "ignorar", "archivos_objetivo"):
             # Una cadena suelta se recorrería letra a letra sin avisar.
             if clave in c and not (isinstance(c[clave], list) and all(
                     isinstance(x, str) and x for x in c[clave])):
@@ -329,7 +331,12 @@ def _rangos_objetivo(texto, lineas):
     alrededor de un cambio de módulo abarca funciones que el arreglo no tocó
     (Codex, email-triage-plugin#203: un hallazgo en una vecina contaba como detección).
     """
-    funciones = mr._funciones_python(texto)
+    return _rangos_por_funcion(mr._funciones_python(texto), lineas)
+
+
+def _rangos_por_funcion(funciones, lineas):
+    """La función que contiene cada línea cambiada; fuera de toda función,
+    solo esa línea. `funciones` es None si el archivo no se pudo analizar."""
     if funciones is None:
         return []
     rangos = set()
@@ -346,12 +353,30 @@ def _rangos_objetivo(texto, lineas):
     return unidos
 
 
+def _rangos_objetivo_archivo(archivo, texto, lineas):
+    """Rangos de un archivo de `archivos_objetivo`, sea del tipo que sea.
+
+    Python: la función (AST). Shell (`.sh`, `.bash` o con shebang de sh/bash):
+    la función de shell (`mr._funciones_shell`). Lo demás (YAML, Markdown…):
+    las líneas cambiadas, juntando las seguidas.
+    """
+    if archivo.endswith(".py"):
+        return _rangos_objetivo(texto, lineas)
+    primera = texto.split("\n", 1)[0]
+    if archivo.endswith((".sh", ".bash")) or re.match(r"#!.*\b(ba)?sh\b", primera):
+        return _rangos_por_funcion(mr._funciones_shell(texto), lineas)
+    return _rangos_por_funcion([], lineas)
+
+
 def objetivos(caso):
     """{archivo: [(inicio, fin, nombre)]} de referencia para localizar citas.
 
     Para un positivo se usa el diff de `arreglo` a `cabeza` para encontrar los
-    rangos del código Python que se corrigió, excluidos los tests. Para un
-    negativo se usan los archivos de los hallazgos históricos.
+    rangos del código Python que se corrigió, excluidos los tests. Si el caso
+    trae `archivos_objetivo`, se usan solo esos archivos, de cualquier tipo
+    (`_rangos_objetivo_archivo`): así se evalúan repos de shell, YAML o
+    Markdown sin cambiar los casos que ya existían. Para un negativo se usan
+    los archivos de los hallazgos históricos.
     """
     if caso["tipo"] == "negativo":
         return {archivo: [] for archivo in caso["archivos"]}
@@ -360,15 +385,20 @@ def objetivos(caso):
                   "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-U0",
                   caso["arreglo"], caso["cabeza"], "--", ".", *exclusiones)
     destino = {}
+    elegidos = caso.get("archivos_objetivo")
     for archivo, lineas in sorted(mr.lineas_cambiadas(inverso).items()):
-        if (not archivo.endswith(".py") or mr._es_test(archivo)
+        if elegidos is not None:
+            if archivo not in elegidos:
+                continue
+        elif (not archivo.endswith(".py") or mr._es_test(archivo)
                 or archivo in caso.get("ignorar", ())):
             continue  # `ignorar`: lo que el arreglo tocó sin ser el defecto
         try:
             texto = git("show", "%s:%s" % (caso["cabeza"], archivo))
         except subprocess.CalledProcessError:
             continue  # el arreglo creó el archivo: en la cabeza no hay dónde apuntar
-        rangos = _rangos_objetivo(texto, lineas)
+        rangos = (_rangos_objetivo_archivo(archivo, texto, lineas) if elegidos is not None
+                  else _rangos_objetivo(texto, lineas))
         if rangos:
             destino[archivo] = rangos
     return destino

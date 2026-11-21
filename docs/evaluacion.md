@@ -284,6 +284,15 @@ y apunta tu valoración aparte.
 3. Ejecuta el listado. Comprueba que el objetivo coincide con el defecto y
    si se puede citar en el diff preparado.
 
+Por defecto, el objetivo de un positivo sale del código Python que cambió el
+arreglo, sin contar los tests ni lo que se liste en `ignorar`. Si el defecto
+está en otro tipo de archivo (shell, YAML, Markdown), añade
+`archivos_objetivo` con esas rutas: entonces solo cuentan esos archivos. En
+Python el objetivo es la función; en shell (`.sh`, `.bash` o con shebang de
+`sh`/`bash`), la función de shell; en el resto, las líneas cambiadas. Un caso
+sin el campo se evalúa igual que antes. En `repo-auditor-ia`, que no tiene
+Python, todos los casos lo llevan.
+
 En un caso positivo puedes añadir `evidencia_minima`. Anota los rangos de
 líneas de `cabeza` necesarios para reconocer el fallo. Cada rango lleva un
 `archivo` relativo al repositorio y sus límites inclusivos `desde` y `hasta`.

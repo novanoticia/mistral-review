@@ -290,9 +290,16 @@ def mask_secrets(texto):
     # Valor entre comillas: se tacha entero, hasta la comilla de cierre de la
     # misma línea. El patrón general se para en espacios, comas y `;`, y de
     # `password="uno dos"` dejaba ver `dos` (Codex en repo-auditor-ia#21).
-    entre_comillas = r'''((?:api[_-]?key|secret|passw(?:or)?d|token|private[_-]?key)[a-z0-9_]*["']?[ \t]*[:=][ \t]*)(["'])(?!\$\{\{)([^\n]*?)\2'''
-    texto = re.sub(entre_comillas, lambda m: m.group(0) if not m.group(3) else
-                   m.group(1) + m.group(2) + "***" + m.group(2), texto, flags=re.IGNORECASE)
+    # Una comilla escapada (`\\"`) no cierra el valor: `"ab\\"cd"` dejaba ver `cd"`.
+    entre_comillas = r'''((?:api[_-]?key|secret|passw(?:or)?d|token|private[_-]?key)[a-z0-9_]*["']?[ \t]*[:=][ \t]*)(["'])(?!\$\{\{)((?:\\.|(?!\2)[^\\\n])*)\2'''
+
+    def ocultar_entre_comillas(match):
+        # Vacío, o `secrets: "inherit"` (la palabra clave con comillas): no son secretos.
+        if not match.group(3) or (match.group(3) == "inherit" and re.match(
+                r"secrets[\"']?[ \t]*:", match.group(1), re.IGNORECASE)):
+            return match.group(0)
+        return match.group(1) + match.group(2) + "***" + match.group(2)
+    texto = re.sub(entre_comillas, ocultar_entre_comillas, texto, flags=re.IGNORECASE)
     patron = r'''((?:api[_-]?key|secret|passw(?:or)?d|token|private[_-]?key)[a-z0-9_]*["']?[ \t]*[:=][ \t]*["']?)(?!\$\{\{)([^\s"',;}]+)'''
     def ocultar(match):
         if not match.group(2).strip("`"):

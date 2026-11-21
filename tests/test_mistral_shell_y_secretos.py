@@ -98,8 +98,14 @@ class TestSecretos(unittest.TestCase):
                 self.assertEqual(tachado, esperado)
                 self.assertNotIn(dos, tachado)
                 self.assertEqual(mr.mask_secrets(tachado), tachado)
-        # Una cadena vacía o una expresión de Actions no son secretos.
-        for linea in ('api_key = ""', 'GH_TOKEN: "${{ github.token }}"'):
+        # Una comilla escapada no cierra el valor (revisión de Mistral de
+        # mistral-review#24): `"ab\\"cd"` dejaba ver `cd"`.
+        escapado = '"db_password": "%s\\"%s"' % (uno, dos)
+        self.assertEqual(mr.mask_secrets(escapado), '"db_password": "***"')
+        # Una cadena vacía, una expresión de Actions o `secrets: "inherit"`
+        # (la palabra clave, con comillas) no son secretos.
+        for linea in ('api_key = ""', 'GH_TOKEN: "${{ github.token }}"',
+                      'secrets: "inherit"', "secrets: 'inherit'"):
             with self.subTest(linea=linea):
                 self.assertEqual(mr.mask_secrets(linea), linea)
 
