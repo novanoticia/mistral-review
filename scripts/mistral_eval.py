@@ -32,6 +32,7 @@ Solo stdlib. Sin `--ejecutar` no llama a la API: lista casos y objetivos.
 """
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import json
 import os
@@ -271,6 +272,22 @@ def _procedencia():
             "evaluado": _procedencia_checkout(os.getcwd())}
 
 
+def _validar_evidencia_minima(caso):
+    tramos = caso["evidencia_minima"]
+    if caso["tipo"] != "positivo" or not isinstance(tramos, list) or not tramos:
+        raise ValueError("caso %s: evidencia_minima debe ser una lista no vacía de un positivo"
+                         % caso["id"])
+    for tramo in tramos:
+        if not isinstance(tramo, dict):
+            raise ValueError("caso %s: tramo de evidencia_minima sin archivo y rango" % caso["id"])
+        archivo, desde, hasta = tramo.get("archivo"), tramo.get("desde"), tramo.get("hasta")
+        if (not isinstance(archivo, str) or "\0" in archivo
+                or any(p in ("", ".", "..") for p in archivo.split("/"))
+                or type(desde) is not int or type(hasta) is not int or not 1 <= desde <= hasta):
+            raise ValueError("caso %s: evidencia_minima requiere ruta relativa y líneas válidas"
+                             % caso["id"])
+
+
 def cargar_casos(ruta):
     """Lee y valida el fichero de casos; un caso mal escrito no se evalúa a medias."""
     with open(ruta, encoding="utf-8") as fh:
@@ -296,6 +313,8 @@ def cargar_casos(ruta):
         if "control" in c and not (c["control"] is True and c["tipo"] == "positivo"):
             # Un control es un positivo sintético que se cuenta aparte.
             raise ValueError("caso %s: control solo admite true, en un positivo" % c["id"])
+        if "evidencia_minima" in c:
+            _validar_evidencia_minima(c)
         if c["id"] in vistos:
             raise ValueError("caso repetido: %s" % c["id"])
         vistos.add(c["id"])
@@ -488,6 +507,16 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta="", *, contexto_modo=
     titulo = git("log", "-1", "--format=%s", caso["cabeza"]).strip()
     cobertura_guia, cobertura_contexto = {}, {}
     guia = mr.leer_guia(cobertura=cobertura_guia)
+    nombre_guia, texto_guia = guia
+    if nombre_guia is not None:
+        if os.path.isabs(nombre_guia):
+            nombre_guia = os.path.basename(nombre_guia)
+        nombre_guia = mr.mask_secrets(nombre_guia)
+    cobertura_guia.update(
+        nombre=nombre_guia,
+        sha256=hashlib.sha256(mr.mask_secrets(texto_guia).encode("utf-8")).hexdigest()
+        if texto_guia else None,
+    )
     opciones_contexto = {"cobertura": cobertura_contexto}
     if contexto_modo == "auxiliar-local":
         opciones_contexto["auxiliares_locales"] = True
@@ -651,12 +680,51 @@ def resumir(casos, resultados, modelo, repeticiones, proveedor="mistral", ruta="
     return "\n".join(partes) + "\n"
 
 
-def listar(casos):
+def _comprobar_rangos_evidencia(caso):
+    """Contrasta cada rango con las líneas del archivo en el commit revisado."""
+    longitudes = {}
+    for tramo in caso.get("evidencia_minima", ()):
+        archivo = tramo["archivo"]
+        ruta_informe = mr.mask_secrets(mr._linea(archivo, limite=None))
+        if archivo not in longitudes:
+            objeto = "%s:%s" % (caso["cabeza"], archivo)
+            try:
+                contenido = subprocess.run(("git", "cat-file", "blob", objeto),
+                                           check=True, capture_output=True).stdout
+            except subprocess.CalledProcessError:
+                raise CasoNoEvaluable("evidencia_minima: archivo no disponible en cabeza: %s"
+                                     % ruta_informe) from None
+            # Git numera por LF y también cuenta una última línea sin LF.
+            longitudes[archivo] = contenido.count(b"\n") + int(
+                bool(contenido) and not contenido.endswith(b"\n"))
+        if tramo["hasta"] > longitudes[archivo]:
+            raise CasoNoEvaluable("evidencia_minima: rango %s:%d-%d fuera de las %d líneas de cabeza"
+                                 % (ruta_informe, tramo["desde"], tramo["hasta"], longitudes[archivo]))
+
+
+def _evidencia_minima_visible(caso, prefijo, contexto_modo):
+    visibles = {}
+    for ruta, linea, numero in mr._lineas_de_hunks(prefijo):
+        if linea[0] in "+ ":
+            visibles.setdefault(ruta, set()).add(numero)
+    mr.obtener_contexto(prefijo, caso["cabeza"], lineas_visibles=visibles,
+                        auxiliares_locales=contexto_modo == "auxiliar-local")
+    for tramo in caso["evidencia_minima"]:
+        archivo, desde, hasta = tramo["archivo"], tramo["desde"], tramo["hasta"]
+        total = hasta - desde + 1
+        presentes = sum(desde <= numero <= hasta for numero in visibles.get(archivo, ()))
+        estado = "completa" if presentes == total else "parcial" if presentes else "ausente"
+        yield "    %s:%d-%d %s (%d/%d)" % (
+            mr.mask_secrets(mr._linea(archivo, limite=None)), desde, hasta, estado, presentes, total)
+
+
+def listar(casos, *, contexto_modo=None):
     """Comprueba los casos y prepara su listado sin llamar a la API."""
     lineas, errores = [], []
     for c in casos:
         try:
             diff, destino = _datos_caso(c)
+            _comprobar_rangos_evidencia(c)
         except CasoNoEvaluable as fallo:
             errores.append("::error::Caso %s: %s" % (mr._linea(c["id"]), fallo))
             continue
@@ -667,14 +735,17 @@ def listar(casos):
         prefijo = mr.mask_secrets(diff)[:mr.MAX_DIFF]
         if not _cita_directa_visible(prefijo, destino):
             lineas.append("  sin cita directa visible en el diff preparado")
+        if contexto_modo is not None and "evidencia_minima" in c:
+            lineas.append("  evidencia mínima · %s" % contexto_modo)
+            lineas.extend(_evidencia_minima_visible(c, prefijo, contexto_modo))
     if errores:
         raise CasoNoEvaluable("\n".join(errores))
     return "\n".join(lineas)
 
 
-def _comprobar_casos(casos, mostrar_listado=False):
+def _comprobar_casos(casos, mostrar_listado=False, *, contexto_modo="estandar"):
     try:
-        listado = listar(casos)
+        listado = listar(casos, contexto_modo=contexto_modo if mostrar_listado else None)
     except CasoNoEvaluable as fallo:
         print(fallo)
         return False
@@ -710,7 +781,7 @@ def main(argv=None):
             return 2
         casos = [c for c in casos if c["id"] in pedidos]
     if not args.ejecutar:
-        return 0 if _comprobar_casos(casos, mostrar_listado=True) else 2
+        return 0 if _comprobar_casos(casos, mostrar_listado=True, contexto_modo=args.contexto) else 2
     # Mínimo seguro: una petición por revisión. Los reintentos se descuentan
     # del mismo tope en el transporte y pueden agotar la evaluación antes.
     if args.repeticiones < 1 or len(casos) * args.repeticiones > MAX_LLAMADAS:
@@ -755,6 +826,10 @@ def main(argv=None):
     resultados = {c["id"]: [] for c in casos}
     agotado = cancelada = False
     procedencia = _procedencia()
+    exclusiones = [
+        mr.mask_secrets(os.path.relpath(patron) if os.path.isabs(patron) else patron)
+        for patron in mr.excluidos()
+    ]
     opciones_revision = {}
     if args.contexto != "estandar":
         opciones_revision["contexto_modo"] = args.contexto
@@ -766,6 +841,7 @@ def main(argv=None):
                 "en_curso": en_curso,
                 "peticiones": presupuesto.usadas, "incompleta": agotado or cancelada,
                 "cancelada": cancelada, "procedencia": procedencia,
+                "exclusiones": exclusiones,
                 "tokens": {"entrada": presupuesto.entrada,
                            "salida": presupuesto.salida,
                            "respuestas": presupuesto.respondidas,

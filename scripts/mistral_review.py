@@ -539,7 +539,7 @@ def _auxiliares_python(texto, nuevas):
 
 def _bloque_auxiliar(ruta, texto, lineas, nuevas, visibles, rangos, limite):
     """Elige el bloque completo más corto que cabe y aporta código nuevo."""
-    mejor = ""
+    mejor, tramo = "", None
     for nodo in _auxiliares_python(texto, nuevas):
         inicio, fin = nodo.lineno, nodo.end_lineno
         if fin - inicio >= limite or any(n in visibles for n in range(inicio, fin + 1)):
@@ -554,10 +554,12 @@ def _bloque_auxiliar(ruta, texto, lineas, nuevas, visibles, rangos, limite):
         bloque = mask_secrets(bloque)
         if len(bloque) <= limite and (not mejor or len(bloque) < len(mejor)):
             mejor = bloque
-    return mejor
+            tramo = (inicio, fin)
+    return mejor, tramo
 
 
-def obtener_contexto(diff, cabeza, *, cobertura=None, auxiliares_locales=False):
+def obtener_contexto(diff, cabeza, *, cobertura=None, auxiliares_locales=False,
+                     lineas_visibles=None):
     """Funciones completas (versión nueva) que contienen los cambios.
 
     Solo fuentes y tests Python y shell: no leer configuraciones de
@@ -566,6 +568,7 @@ def obtener_contexto(diff, cabeza, *, cobertura=None, auxiliares_locales=False):
     los tests, para que el presupuesto no se gaste en estos. Cada archivo y
     el conjunto tienen un presupuesto visible, y se corta por líneas enteras.
     Si se pide cobertura, anota recuentos y recortes sin copiar el texto.
+    `lineas_visibles` acumula los números de línea de los bloques incluidos.
     El experimento de evaluación permite añadir un auxiliar con el sobrante.
     """
     cambios = lineas_cambiadas(diff)
@@ -578,7 +581,7 @@ def obtener_contexto(diff, cabeza, *, cobertura=None, auxiliares_locales=False):
                 visibles.setdefault(ruta, set()).add(numero)
                 if linea.startswith("+"):
                     nuevas.setdefault(ruta, set()).add(numero)
-    auxiliar = ""
+    auxiliar, tramo_auxiliar = "", None
     partes = []
     restante = MAX_CONTEXTO
     rutas_con_contexto = 0
@@ -620,6 +623,11 @@ def obtener_contexto(diff, cabeza, *, cobertura=None, auxiliares_locales=False):
             if cuerpo:
                 usado += len(etiqueta) + 1
                 bloques.append(etiqueta + "\n" + "\n".join(cuerpo))
+                if lineas_visibles is not None:
+                    # El elemento vacío tras el último LF no es una línea del archivo.
+                    fin_archivo = len(lineas) - int(lineas[-1] == "")
+                    fin_visible = min(inicio + len(cuerpo), fin_archivo + 1)
+                    lineas_visibles.setdefault(ruta, set()).update(range(inicio, fin_visible))
         if not bloques:
             if omitidos:  # no cabe ni una línea: decirlo, sin bloque vacío
                 partes.append("Contexto de %s omitido por presupuesto: %s" % (
@@ -638,15 +646,19 @@ def obtener_contexto(diff, cabeza, *, cobertura=None, auxiliares_locales=False):
         sobrante_archivo = min(MAX_AUXILIAR, MAX_ARCHIVO - ocupado)
         if sobrante_archivo <= 0:
             continue
-        bloque = _bloque_auxiliar(ruta, texto, lineas, nuevas[ruta], visibles[ruta],
-                                 rangos, sobrante_archivo)
+        bloque, tramo = _bloque_auxiliar(ruta, texto, lineas, nuevas[ruta], visibles[ruta],
+                                        rangos, sobrante_archivo)
         if bloque and (not auxiliar or len(bloque) < len(auxiliar)):
             auxiliar = bloque
+            tramo_auxiliar = (ruta, *tramo)
     contexto = "\n\n".join(partes)
     if auxiliar:
         ocupado = max(len(contexto), len(mask_secrets(contexto)))
         if ocupado + len(auxiliar) > MAX_CONTEXTO:
             auxiliar = ""
+        elif lineas_visibles is not None:
+            ruta, inicio, fin = tramo_auxiliar
+            lineas_visibles.setdefault(ruta, set()).update(range(inicio, fin + 1))
     if cobertura is not None:
         cobertura.update(rutas_candidatas=len(candidatas),
                          rutas_con_contexto=rutas_con_contexto,
@@ -1024,24 +1036,31 @@ def _linea(valor, limite=500):
     return " ".join(str(valor or "").split())[:limite]
 
 
-def _codigo(valor, limite=500):
-    """Texto en un span de código: sin menciones, enlaces, imágenes ni HTML."""
-    return "`%s`" % _linea(valor, limite).replace("`", "'")
+def _codigo(valor, limite=500, *, neutralizar_menciones=True):
+    """Muestra texto literal y conserva las arrobas de las citas de código."""
+    texto = _linea(valor, limite).replace("<!--", "<\u200b!--")
+    if neutralizar_menciones:
+        texto = texto.replace("@", "@\u200b")
+    if not texto:
+        return ""
+    mayor = max((len(racha) for racha in re.findall(r"`+", texto)), default=0)
+    delimitador = "`" * (mayor + 1)
+    # Separa comillas contiguas y evita que el tachado final absorba el cierre.
+    if mayor or not mask_secrets(texto + delimitador).endswith(delimitador):
+        texto = " %s " % texto
+    return "%s%s%s" % (delimitador, texto, delimitador)
 
 
-def _render_hallazgo(partes, i, h, inerte=False):
-    """`inerte`: texto de una respuesta NO aceptada (email-triage-plugin#149), que puede venir
-    de una inyección en el diff; todo va en spans de código."""
+def _render_hallazgo(partes, i, h):
     sev = str(h.get("severidad") or "").lower()
-    texto = _codigo if inerte else _linea
     partes.append("%d. %s **%s** · %s — %s" % (
         i, SEVERIDADES.get(sev, "⚪"), sev if sev in SEVERIDADES else "?",
-        _codigo(h.get("archivo"), 200), texto(h.get("problema"))))
+        _codigo(h.get("archivo"), 200), _codigo(h.get("problema"))))
     for etiqueta, clave in (("Escenario", "escenario"),
                             ("Fragmento", "fragmento"),
                             ("Arreglo", "arreglo")):
         if h.get(clave):
-            valor = _codigo(h[clave]) if clave == "fragmento" else texto(h[clave])
+            valor = _codigo(h[clave], neutralizar_menciones=clave != "fragmento")
             partes.append("   - %s: %s" % (etiqueta, valor))
 
 
@@ -1086,7 +1105,7 @@ def renderizar(resultado, modelo, diff_len, recortado, cabeza="", error=None,
             for i, (h, causa) in enumerate(sin_verificar):
                 # Misma numeración que el diagnóstico (`hallazgo_<i>_...`).
                 partes.append("Índice del diagnóstico: `hallazgo_%d`." % i)
-                _render_hallazgo(partes, i + 1, h, inerte=True)
+                _render_hallazgo(partes, i + 1, h)
                 partes.append("   - Cita: %s" % (
                     "verificada en el diff" if causa is None
                     else "no verificada (`%s`)" % causa))
@@ -1095,7 +1114,7 @@ def renderizar(resultado, modelo, diff_len, recortado, cabeza="", error=None,
         if base and cabeza:
             partes.insert(1, MARCA_OK % (base, cabeza))
         if resumen:
-            partes.append(resumen)
+            partes.append(_codigo(resumen, limite=None))
         pendientes = [c for c in comprobaciones or () if c["estado"] == "pendiente"]
         revisadas = [c for c in comprobaciones or () if c["estado"] != "pendiente"]
         # Lo que pide una acción va arriba; lo que no, plegado (email-triage-plugin#198 y
@@ -1116,9 +1135,9 @@ def renderizar(resultado, modelo, diff_len, recortado, cabeza="", error=None,
 
         def lista(casos):
             for c in casos:
-                partes.append("- **%s** · `%s`: %s → %s" % (
-                    c["estado"], _linea(c["archivo"], 200),
-                    _linea(c["escenario"]), _linea(c["conclusion"])))
+                partes.append("- **%s** · %s: %s → %s" % (
+                    c["estado"], _codigo(c["archivo"], 200),
+                    _codigo(c["escenario"]), _codigo(c["conclusion"])))
 
         if pendientes:
             partes.append("### Comprobaciones por lectura pendientes (%d) — "
