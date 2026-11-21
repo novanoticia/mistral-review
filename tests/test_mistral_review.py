@@ -3,6 +3,7 @@
 Sin red ni API: se prueban el diff, el prompt, el parseo del JSON, el
 comentario y la publicación (con `subprocess` simulado).
 """
+import ast
 from datetime import datetime, timezone
 import io
 import urllib.error
@@ -116,8 +117,38 @@ class TestRespuesta(unittest.TestCase):
         self.assertIn("[Mistral AI (@mistralai)](https://github.com/mistralai)", md)
         self.assertLess(md.index("grave"), md.index("menor"))
         self.assertIn("🔴 **alta** · `a.py`", md)
-        self.assertIn("Escenario: texto truncado -> eco_distinto", md)
-        self.assertIn("`x = '1'`", md)  # la comilla invertida no rompe el código
+        self.assertIn("Escenario: `texto truncado -> eco_distinto`", md)
+        self.assertIn("`` x = `1` ``", md)
+
+    def test_publica_como_texto_literal_la_respuesta_y_conserva_enlaces_propios(self):
+        texto = ("@equipo [nota](https://example.invalid/nota) "
+                 "![figura](https://example.invalid/figura.png) <!-- nota --> `f()`")
+        hallazgo = dict(HALLAZGO, archivo="a`b.py", problema=texto, escenario=texto, arreglo=texto)
+        comprobacion = dict(COMPROBACION, archivo="a`b.py", escenario=texto, conclusion=texto)
+        url = "https://github.com/o/r/actions/runs/1"
+        md = mr.renderizar((texto, [hallazgo]), "m", 10, False,
+                           comprobaciones=[comprobacion], ejecucion_url=url)
+        literal = texto.replace("@equipo", "@\u200bequipo").replace("<!--", "<\u200b!--")
+        self.assertEqual(md.count("`` %s ``" % literal), 6)
+        self.assertEqual(md.count("`` a`b.py ``"), 2)
+        self.assertIn("[Ejecución de Actions](%s)" % url, md)
+
+    def test_se_puede_copiar_una_cita_con_decorador(self):
+        hallazgo = dict(HALLAZGO, fragmento="@staticmethod", problema="Avisa a @equipo")
+        md = mr.renderizar(("R", [hallazgo]), "m", 10, False)
+        prefijo = "   - Fragmento: `"
+        linea = next(l for l in md.splitlines() if l.startswith(prefijo))
+        self.assertTrue(linea.endswith("`"))
+        copiado = linea[len(prefijo):-1]
+        self.assertEqual(copiado, "@staticmethod")
+        ast.parse(copiado + "\ndef ejemplo():\n    pass\n")
+        self.assertIn("`Avisa a @\u200bequipo`", md)
+
+    def test_tachar_un_valor_al_final_conserva_el_delimitador(self):
+        for valor in ("valor-ficticio", "***"):
+            with self.subTest(valor=valor):
+                md = mr.renderizar(("password=" + valor, []), "m", 10, False)
+                self.assertIn("\n` password=*** `\n", md)
 
     def test_sin_hallazgos_y_formato_raro(self):
         self.assertIn("**Sin hallazgos.**",
@@ -414,12 +445,10 @@ class TestComprobaciones(unittest.TestCase):
         _, cuerpo = TestMain().ejecutar(texto)
         seccion = cuerpo.split("sin aceptar", 1)[1]
         self.assertIn("hallazgo_0", seccion)
-        for linea in seccion.splitlines():
-            for peligroso in ("@octocat", "](https", "<img", "<details>"):
-                if peligroso in linea:
-                    # Solo dentro de un span de código, que GitHub no interpreta.
-                    trozos = linea.split("`")
-                    self.assertTrue(all(peligroso not in t for t in trozos[0::2]), linea)
+        self.assertIn("`` x` @\u200boctocat [clic](https://evil.invalid) <img src=x> ` ``", seccion)
+        self.assertIn("`ver @\u200boctocat ![p](https://evil.invalid/p.png)`", seccion)
+        self.assertIn("`<details>`", seccion)
+        self.assertIn("`[aquí](https://evil.invalid)`", seccion)
 
     def test_cita_mala_no_borra_las_demas_ni_aprueba_el_check(self):
         malo = dict(HALLAZGO, fragmento="línea que no existe", problema="Defecto B")

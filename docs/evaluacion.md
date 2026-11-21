@@ -153,6 +153,10 @@ indica que ese dato no pudo verificarse. Para el revisor se comprueban
 los archivos versionados. Una evaluación local puede leer una guía sin
 versionar aunque `cambios_locales` sea `false`.
 
+El campo `exclusiones` del artefacto recoge los patrones de Git aplicados,
+en el orden usado y con el filtro de secretos. Las rutas absolutas se
+registran de forma relativa al repositorio evaluado.
+
 Cada repetición registra las peticiones HTTP reales en `solicitudes` y la
 duración total en milisegundos en `duracion_ms`, desde la preparación hasta
 la validación, con los reintentos y sus esperas. `cobertura` describe mediante
@@ -169,7 +173,10 @@ recuentos e indicadores la entrada que se preparó, incluso si falla la petició
   del diff y `linea_final_incompleta` si el prefijo quedó cortado dentro de
   una línea.
 - `guia.estado` indica si la guía estaba `ausente`, `vacia`, `completa` o
-  `recortada`.
+  `recortada`. `guia.nombre` identifica la guía elegida con el filtro de
+  secretos. Para una ruta absoluta se guarda solo el nombre del archivo.
+  `guia.sha256` guarda la huella del texto preparado tras el recorte y el
+  filtrado. Si la entrada no contiene texto de guía, la huella es `null`.
 - `contexto` cuenta los archivos Python y shell candidatos a partir del
   prefijo del diff (`rutas_candidatas`), aquellos para los que se preparó
   contexto (`rutas_con_contexto`) y aquellos que no pudieron leerse
@@ -225,11 +232,21 @@ El JSON registra el modo en `contexto_modo`. En el modo experimental,
 cada repetición y vale `0` cuando no se añade una función. En la terminal,
 el parámetro correspondiente es `--contexto auxiliar-local`.
 
-El efecto sobre los aciertos y los falsos positivos queda por medir. El
-protocolo para una comparación autorizada desde GitHub tiene dos ejecuciones
-de pago. Incluye casos positivos, negativos y casos reservados que no se
-hayan usado para diseñar la variante. Con pocas repeticiones, el resultado
-es exploratorio.
+En el piloto local se compararon `estandar` y `auxiliar-local` con
+`zai-glm-5-3-flash` vía Mistral en dos casos de `email-triage-plugin`,
+`p90-aviso-raiz` y `n116-no-aplica-core`. Se hicieron dos repeticiones por caso
+y modo, con esfuerzo `low`, un tope de 16.000 tokens de salida, la misma guía
+(`CLAUDE.md`) y las mismas exclusiones.
+
+Pasaron la validación las cuatro revisiones del modo estándar y tres de las
+cuatro del auxiliar. La revisión rechazada incluyó referencias inválidas.
+Ambos modos pasaron por alto el defecto objetivo. La muestra es exploratoria
+y deja abierta la comparación general de aciertos y falsos positivos. Se
+mantuvo el contexto habitual en las revisiones de PR.
+
+Si se autoriza otra comparación desde GitHub, el protocolo tiene dos
+ejecuciones de pago. Incluye casos positivos, negativos y casos reservados
+que no se hayan usado para diseñar la variante.
 
 1. Con el ejemplo actualizado en el repo evaluado, abre **Actions → Mistral
    Eval → Run workflow**. Selecciona `estandar` en `contexto` y anota los casos
@@ -267,9 +284,25 @@ y apunta tu valoración aparte.
 3. Ejecuta el listado. Comprueba que el objetivo coincide con el defecto y
    si se puede citar en el diff preparado.
 
-`defecto` y `arreglo` son referencias para evaluar y etiquetar. Quedan en
-los metadatos del artefacto. Mantén la solución fuera del material que lee el
-modelo, incluida la guía, y conserva `cabeza` en el commit anterior al arreglo.
+En un caso positivo puedes añadir `evidencia_minima`. Anota los rangos de
+líneas de `cabeza` necesarios para reconocer el fallo. Cada rango lleva un
+`archivo` relativo al repositorio y sus límites inclusivos `desde` y `hasta`.
+La [plantilla](../ejemplos/eval-casos.json) incluye un ejemplo.
+
+Ejecuta el listado sin `--ejecutar` y con el mismo `--contexto` y las mismas
+exclusiones que usarías en la evaluación. Para cada rango, el listado indica
+cuántas líneas completas aparecen en el diff o el contexto adicional y si
+la evidencia es completa, parcial o ausente. La comprobación previa valida
+las rutas y los rangos contra `cabeza`. Si el archivo falta o el rango supera
+su longitud, la comprobación se detiene antes de llamar a la API.
+Las líneas eliminadas se siguen teniendo en cuenta en la comprobación de
+citas del diff. El listado informa de la visibilidad de las líneas. La
+detección del defecto se mide en la evaluación posterior.
+
+`defecto`, `arreglo` y `evidencia_minima` son referencias para evaluar y
+etiquetar. Quedan en los metadatos del artefacto. Mantén la solución fuera
+del material que lee el modelo, incluida la guía, y conserva `cabeza` en el
+commit anterior al arreglo.
 
 Si se usa la evaluación para ajustar el prompt, hay que separar casos de
 ajuste y de evaluación: medir con los mismos casos con los que se ajustó solo

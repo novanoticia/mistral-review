@@ -119,6 +119,11 @@ encontraron defecto. El prompt pide que cada comprobación intente romper el
 cambio con una entrada que los tests del diff no ejerciten, y que cada
 hallazgo sobreviva a un intento de refutación o pase a «pendiente».
 
+La revisión y el contraste muestran las respuestas del modelo como texto
+literal. Las citas de código conservan la arroba de los decoradores y otras
+expresiones. Los enlaces a la ejecución y a los comentarios de origen los
+añade el revisor.
+
 **Verificado y propuesto.** Qué se envía, qué se publica y cuándo está fijado
 por tests. Que el prompt nuevo mejore el razonamiento del modelo **no está
 medido**: hay que contrastarlo en PR reales (ver la auditoría enlazada abajo).
@@ -190,8 +195,8 @@ mantenedor. El token tiene `contents: read` y `pull-requests: write`.
   sostiene con el contexto disponible**, **ya corregido** o **pendiente**.
   Los dictámenes concluyentes deben citar líneas completas del código enviado;
   como en la revisión, no cuentan la sangría ni los espacios de los extremos,
-  y el resto debe coincidir carácter a carácter. Declarar
-  «ya corregido» requiere citas del original y de la cabeza; si falta alguno,
+  y el resto debe coincidir carácter a carácter. «Ya corregido» requiere
+  citas del original y de la cabeza en commits distintos. Si falta una versión,
   corresponde dejarlo pendiente. Las citas no garantizan la verdad del juicio.
 - Se conserva el comentario anterior. Las marcas identifican fuente y SHA
   para evitar repetirla en reintentos; se vuelve a comprobar el historial antes

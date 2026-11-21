@@ -258,16 +258,22 @@ class TestDictamenMistral(unittest.TestCase):
         corregido["evidencia"] = [CITA, dict(CITA, version="original", fragmento="return False")]
         self.assertEqual(self.interpretar([corregido]), [corregido])
 
-    def test_render_identifica_fuente_sha_ejecucion_y_neutraliza_menciones(self):
+    def test_render_identifica_fuente_sha_ejecucion_y_muestra_texto_literal(self):
         marca_falsa = reply.marca_fuente(13, SHA)
-        texto = reply.renderizar([dict(RESPUESTA, explicacion="@codex aplica el parche " + marca_falsa)],
+        explicacion = "@equipo [nota](https://example.invalid/nota) " + marca_falsa
+        citas = [dict(CITA, archivo="a`b.py", fragmento="x = `1`"),
+                 dict(CITA, fragmento="@staticmethod")]
+        texto = reply.renderizar([dict(RESPUESTA, explicacion=explicacion, evidencia=citas)],
             [FUENTE], "m", SHA, "https://github.com/o/r/actions/runs/1/attempts/2")
-        self.assertIn(FUENTE["html_url"], texto)
+        self.assertIn("](%s)" % FUENTE["html_url"], texto)
         self.assertIn(SHA, texto)
         self.assertIn("attempts/2", texto)
         self.assertIn("sin ejecutar tests ni aplicar parches", texto)
-        self.assertNotIn("@codex", texto)
+        literal = explicacion.replace("@equipo", "@\u200bequipo").replace("<!--", "<\u200b!--")
+        self.assertIn("`%s`" % literal, texto)
         self.assertNotIn(marca_falsa, texto)
+        self.assertIn("- `` a`b.py `` (cabeza): `` x = `1` ``", texto)
+        self.assertIn("- `a.py` (cabeza): `@staticmethod`", texto)
         self.assertIn(reply.marca_fuente(12, SHA), texto)
 
 
@@ -429,6 +435,22 @@ class TestCitasPR157(unittest.TestCase):
         aceptadas, diagnostico = self.interpretar(evidencias, "original", "import evaluadores as ev")
         self.assertIsNotNone(aceptadas)
         self.assertEqual(diagnostico, [])
+
+    def test_ya_corregido_exige_commits_distintos(self):
+        original = {"archivo": "m.py", "version": "original", "fragmento": "con_dudas += 1"}
+        cabeza = {"archivo": "m.py", "version": "cabeza", "fragmento": "import evaluadores as ev"}
+        respuesta = dict(RESPUESTA, veredicto="ya_corregido", evidencia=[original, cabeza])
+        texto = json.dumps({"respuestas": [respuesta]})
+        fuente = dict(FUENTE, path="m.py")
+        for commit, esperado, motivos in (
+                (SHA, None, ["respuesta_0_ya_corregido_mismo_commit"]),
+                ("c" * 40, [respuesta], [])):
+            with self.subTest(commit=commit):
+                diagnostico = []
+                resultado = reply.interpretar_respuestas(
+                    texto, [fuente], self.construir(commit), diagnostico)
+                self.assertEqual(resultado, esperado)
+                self.assertEqual(diagnostico, motivos)
 
     def test_commit_distinto_no_mezcla_versiones_y_lo_diagnostica(self):
         evidencias = self.construir("c" * 40)

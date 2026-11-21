@@ -4,6 +4,7 @@ Sin red ni API: fijan la parte mecánica de `scripts/mistral_eval.py`
 (qué objetivo se deriva de un arreglo, dónde cae un hallazgo, qué se cuenta).
 Que el modelo acierte no se puede probar aquí: es lo que la evaluación mide.
 """
+import hashlib
 import importlib.util
 import io
 import json
@@ -49,6 +50,19 @@ class TestCasos(unittest.TestCase):
 
     def test_acepta_los_dos_tipos(self):
         self.assertEqual(len(self.cargar([POSITIVO, NEGATIVO])), 2)
+
+    def test_evidencia_minima_requiere_rangos_validos_en_casos_positivos(self):
+        tramo = {"archivo": "a.py", "desde": 2, "hasta": 3}
+        positivo = dict(POSITIVO, evidencia_minima=[tramo])
+        self.assertEqual(self.cargar([positivo]), [positivo])
+        for caso in (dict(NEGATIVO, evidencia_minima=[tramo]),
+                     dict(POSITIVO, evidencia_minima=[]),
+                     dict(POSITIVO, evidencia_minima=[dict(tramo, archivo="/a.py")]),
+                     dict(POSITIVO, evidencia_minima=[dict(tramo, archivo="a\0.py")]),
+                     dict(POSITIVO, evidencia_minima=[dict(tramo, desde=True)]),
+                     dict(POSITIVO, evidencia_minima=[dict(tramo, hasta=1)])):
+            with self.subTest(caso=caso), self.assertRaisesRegex(ValueError, "evidencia_minima"):
+                self.cargar([caso])
 
     def test_rechaza_casos_incompletos_repetidos_o_sin_sha(self):
         malos = ([dict(POSITIVO, tipo="otro")],
@@ -804,6 +818,53 @@ class TestMain(unittest.TestCase):
         self.assertEqual((codigo, salida.strip()), (0, "lista"))
         revisar.assert_not_called()
 
+    def test_artefacto_guarda_guia_filtrada_y_exclusiones(self):
+        valor = "valor-ficticio-de-guia"
+        parte_visible = 'Primera regla.\napi_key = "%s"\n' % valor
+        respuesta = json.dumps({"resumen": "R", "hallazgos": [],
+                                "comprobaciones": COMPROBACIONES})
+        with tempfile.TemporaryDirectory() as d:
+            guia = os.path.join(d, "GUIA.md")
+            ruta = os.path.join(d, "r.json")
+            with open(guia, "w", encoding="utf-8") as fh:
+                fh.write(parte_visible + "Segunda regla fuera del tope.")
+            patron_absoluto = os.path.abspath("dist/**")
+            entorno = {"MISTRAL_API_KEY": "clave", "MISTRAL_PROVEEDOR": "mistral",
+                       "MISTRAL_GUIAS": os.path.join(d, "inexistente.md") + "," + guia,
+                       "MISTRAL_EXCLUIDOS": "  tests/golden/**,\n catálogo.yaml \n" + patron_absoluto}
+            with mock.patch.dict(os.environ, entorno), \
+                    mock.patch.object(ev, "cargar_casos", return_value=[NEGATIVO]), \
+                    mock.patch.object(ev, "git", return_value="asunto"), \
+                    mock.patch.object(mr, "MAX_GUIA", len(parte_visible)), \
+                    mock.patch.object(mr, "obtener_diff", return_value=DIFF), \
+                    mock.patch.object(mr, "obtener_contexto", return_value=""), \
+                    mock.patch.object(mr, "obtener_rutas_diff", return_value={"a.py"}), \
+                    mock.patch.object(mr.urllib.request, "urlopen", return_value=
+                                      TestRevisar.respuesta_http("stop", respuesta)) as abrir, \
+                    mock.patch.object(ev, "guardar", wraps=ev.guardar) as guardar, \
+                    mock.patch.object(mr, "escribir_resumen"), redirect_stdout(io.StringIO()):
+                self.assertEqual(ev.main(["--ejecutar", "--repeticiones", "1", "--salida", ruta]), 0)
+            with open(ruta, encoding="utf-8") as fh:
+                guardado = fh.read()
+
+        artefacto = json.loads(guardado)
+        self.assertEqual(artefacto["exclusiones"], ["tests/golden/**", "catálogo.yaml", "dist/**"])
+        parcial = guardar.call_args_list[0].args[1]
+        self.assertTrue(parcial["en_curso"])
+        self.assertEqual(parcial["exclusiones"], artefacto["exclusiones"])
+        self.assertEqual(parcial["resultados"], artefacto["resultados"])
+        mensajes = json.loads(abrir.call_args.args[0].data)["messages"]
+        bloque_guia = mensajes[1]["content"].split("\n\n## Título\n", 1)[0]
+        texto_enviado = bloque_guia.split("\n", 1)[1]
+        self.assertIn('api_key = "***"', texto_enviado)
+        self.assertNotIn("Segunda regla", texto_enviado)
+        self.assertEqual(artefacto["resultados"]["n"][0]["cobertura"]["guia"], {
+            "estado": "recortada", "nombre": "GUIA.md",
+            "sha256": hashlib.sha256(texto_enviado.encode("utf-8")).hexdigest()})
+        self.assertNotIn("Primera regla", guardado)
+        self.assertNotIn(valor, guardado)
+        self.assertNotIn(d, guardado)
+
     def test_contexto_auxiliar_se_opta_y_no_amplia_las_citas_del_diff(self):
         valor = "valor-ficticio-del-contexto"
         fuente_auxiliar = ('def auxiliar(x):\n    password = "%s"\n'
@@ -887,6 +948,75 @@ class TestMain(unittest.TestCase):
         self.assertEqual(codigo, 0)
         self.assertIn("sin cita directa visible", salida.getvalue())
         abrir.assert_not_called()
+
+    def test_listado_comprueba_rangos_con_el_contexto_seleccionado(self):
+        fuente = ("def auxiliar(x):\n    return x + 1\n" + "\n" * 20
+                  + "def f(x):\n    return auxiliar(x)\n")
+        ultima = len(fuente.splitlines())
+        diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+                "@@ -%d +%d @@\n-    return x\n+    return auxiliar(x)\n" % (ultima, ultima))
+        caso = dict(POSITIVO, evidencia_minima=[
+            {"archivo": "a.py", "desde": ultima - 1, "hasta": ultima},
+            {"archivo": "a.py", "desde": 1, "hasta": 2},
+            {"archivo": "a.py", "desde": 1, "hasta": 3},
+        ])
+        for modo, auxiliar, parcial in (("estandar", "ausente (0/2)", "ausente (0/3)"),
+                                       ("auxiliar-local", "completa (2/2)", "parcial (2/3)")):
+            salida = io.StringIO()
+            with self.subTest(modo=modo), \
+                    mock.patch.object(ev, "cargar_casos", return_value=[caso]), \
+                    mock.patch.object(ev, "objetivos", return_value={"a.py": [(ultima - 1, ultima, "f")]}), \
+                    mock.patch.object(mr, "obtener_diff", return_value=diff), \
+                    mock.patch.object(mr.subprocess, "run", return_value=mock.Mock(
+                        returncode=0, stdout=fuente.encode("utf-8"))), \
+                    mock.patch.object(mr.urllib.request, "urlopen") as abrir, redirect_stdout(salida):
+                self.assertEqual(ev.main(["--contexto", modo]), 0)
+            abrir.assert_not_called()
+            self.assertIn("a.py:%d-%d completa (2/2)" % (ultima - 1, ultima), salida.getvalue())
+            self.assertIn("a.py:1-2 " + auxiliar, salida.getvalue())
+            self.assertIn("a.py:1-3 " + parcial, salida.getvalue())
+            self.assertNotIn("return x + 1", salida.getvalue())
+
+    def test_listado_no_cuenta_lineas_eliminadas_o_a_medias_como_evidencia_de_cabeza(self):
+        diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+                "@@ -1,2 +1,2 @@\n contexto\n-vieja\n+nueva\n")
+        caso = dict(POSITIVO, evidencia_minima=[{"archivo": "a.py", "desde": 1, "hasta": 2}])
+        salida = io.StringIO()
+        with mock.patch.object(ev, "cargar_casos", return_value=[caso]), \
+                mock.patch.object(ev, "objetivos", return_value={"a.py": [(1, 2, "f")]}), \
+                mock.patch.object(mr, "obtener_diff", return_value=diff), \
+                mock.patch.object(ev.subprocess, "run", return_value=mock.Mock(stdout=b"contexto\nnueva")), \
+                mock.patch.object(mr, "MAX_DIFF", len(diff) - 1), \
+                mock.patch.object(mr, "MAX_CONTEXTO", 0), redirect_stdout(salida):
+            self.assertEqual(ev.main([]), 0)
+        self.assertIn("a.py:1-2 parcial (1/2)", salida.getvalue())
+
+    def test_evidencia_invalida_se_detecta_antes_de_evaluar(self):
+        comandos = ("git", "cat-file", "blob", SHA + ":a.py")
+        caso = dict(POSITIVO, evidencia_minima=[{"archivo": "a.py", "desde": 2, "hasta": 3}])
+        entorno = {"MISTRAL_PROVEEDOR": "mistral", "MISTRAL_API_KEY": "clave"}
+        resultados = (
+            (subprocess.CompletedProcess(comandos, 0, stdout=b"primera\nsegunda\n"),
+             "rango a.py:2-3 fuera de las 2 líneas de cabeza"),
+            (subprocess.CalledProcessError(128, comandos), "archivo no disponible en cabeza: a.py"),
+        )
+        for argv in ([], ["--ejecutar"]):
+            for resultado, esperado in resultados:
+                salida = io.StringIO()
+                with self.subTest(argv=argv, esperado=esperado), \
+                        mock.patch.dict(os.environ, entorno), \
+                        mock.patch.object(ev, "cargar_casos", return_value=[caso]), \
+                        mock.patch.object(ev, "_datos_caso", return_value=(DIFF, {"a.py": [(1, 2, "f")]})), \
+                        mock.patch.object(ev, "_procedencia", return_value={}), \
+                        mock.patch.object(ev.subprocess, "run", side_effect=[resultado]) as git_blob, \
+                        mock.patch.object(mr, "obtener_contexto", return_value=""), \
+                        mock.patch.object(ev, "revisar", return_value=TestGuardadoParcial.REGISTRO) as revisar, \
+                        mock.patch.object(mr, "escribir_resumen"), redirect_stdout(salida):
+                    self.assertEqual(ev.main(argv), 2)
+                    git_blob.assert_called_once_with(comandos, check=True, capture_output=True)
+                    revisar.assert_not_called()
+                    self.assertIn(esperado, salida.getvalue())
+                    self.assertNotIn("ausente", salida.getvalue())
 
     def test_listado_y_ejecucion_rechazan_todo_el_lote_si_hay_casos_no_evaluables(self):
         vacio = dict(NEGATIVO, id="vacio", cabeza="b" * 40)

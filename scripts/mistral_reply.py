@@ -63,7 +63,7 @@ Devuelve SOLO JSON en español:
 Una respuesta por cada fuente, sin inventar ids; copia cada id como texto,
 igual que aparece. Los dictámenes concluyentes necesitan evidencia literal:
 copia una sola línea entera del código enviado, sin recortarla ni unir varias.
-Para ya_corregido cita tanto original como cabeza.
+Para ya_corregido cita original y cabeza de commits distintos.
 Si la fuente describe un escenario (una entrada y un resultado), síguelo por
 el código enviado antes de decidir: casi siempre basta para confirmarlo o
 refutarlo. Usa pendiente solo si falta código para demostrarlo, y entonces
@@ -222,7 +222,8 @@ def fragmento_git(sha, ruta, linea):
 def construir_mensajes(fuentes, pr):
     # Tachado antes de indexar, como en la revisión: las citas se contrastan
     # con lo que se envió.
-    diff = mr.mask_secrets(mr.obtener_diff(pr["base"]["sha"], pr["head"]["sha"]))
+    cabeza = pr["head"]["sha"]
+    diff = mr.mask_secrets(mr.obtener_diff(pr["base"]["sha"], cabeza))
     # El diff común también permite contrastar respuestas sin ancla de línea
     # (p. ej. Claude publica con la cuenta del mantenedor). Solo + y contexto
     # son evidencia de la cabeza: una línea eliminada no describe el HEAD.
@@ -231,6 +232,8 @@ def construir_mensajes(fuentes, pr):
     datos, evidencias = [], {}
     for f in fuentes:
         identificador = str(f["id"])
+        sha_original = f.get("original_commit_id") or f.get("commit_id")
+        mismo_commit = sha_original == cabeza
         codigo, indice = {}, {"original": {}, "cabeza": {
             ruta: set(lineas) for ruta, lineas in lineas_cabeza.items()}}
         completo = {"original": {}, "cabeza": {}}
@@ -245,9 +248,8 @@ def construir_mensajes(fuentes, pr):
         # atribuimos a otra versión el código que caiga en el mismo número.
         if ruta and f.get("side") != "LEFT":
             for version, sha, linea in (
-                    ("original", f.get("original_commit_id") or f.get("commit_id"),
-                     f.get("original_line") or f.get("line")),
-                    ("cabeza", pr["head"]["sha"], f.get("line") or f.get("original_line"))):
+                    ("original", sha_original, f.get("original_line") or f.get("line")),
+                    ("cabeza", cabeza, f.get("line") or f.get("original_line"))):
                 fragmento = fragmento_git(sha, ruta, linea)
                 if fragmento:
                     indice[version].setdefault(ruta, set()).update(fragmento.pop("lineas"))
@@ -258,7 +260,7 @@ def construir_mensajes(fuentes, pr):
             # que vale para una vale para la otra (email-triage-plugin#157: una línea del diff
             # citada como «original» se rechazaba por estar fuera de la ventana).
             # No aplica a LEFT (arriba): ahí «original» sería la base del diff.
-            if (f.get("original_commit_id") or f.get("commit_id")) == pr["head"]["sha"]:
+            if mismo_commit:
                 for tabla in (indice, completo):
                     union = {}
                     for version in ("original", "cabeza"):
@@ -269,6 +271,7 @@ def construir_mensajes(fuentes, pr):
         # `completo` no es un índice de aceptación: `interpretar_respuestas`
         # solo valida contra «original» y «cabeza».
         indice["completo"] = completo
+        indice["mismo_commit"] = mismo_commit
         evidencias[identificador] = indice
         datos.append({"id": identificador, "autor": f["user"]["login"],
             "comentario": mr.mask_secrets(f["body"][:MAX_COMENTARIO]),
@@ -395,8 +398,11 @@ def interpretar_respuestas(texto, fuentes, evidencias, diagnostico=None):
             if diagnostico is not None:
                 diagnostico.extend(fallidas)
             return None
-        if r["veredicto"] == "ya_corregido" and versiones != {"original", "cabeza"}:
-            return rechazar("respuesta_%d_ya_corregido_sin_ambas_versiones" % i)
+        if r["veredicto"] == "ya_corregido":
+            if versiones != {"original", "cabeza"}:
+                return rechazar("respuesta_%d_ya_corregido_sin_ambas_versiones" % i)
+            if evidencias[identificador].get("mismo_commit"):
+                return rechazar("respuesta_%d_ya_corregido_mismo_commit" % i)
     return respuestas
 
 
@@ -409,11 +415,6 @@ def _cabecera(modelo, proveedor="mistral", ruta=""):
 
 
 def renderizar(respuestas, fuentes, modelo, cabeza, url, proveedor="mistral", ruta=""):
-    def texto_modelo(valor, limite):
-        # No convertir texto del modelo en menciones de bots ni en marcas
-        # ocultas que pudieran suplantar respuestas a otras fuentes.
-        return mr._linea(valor, limite).replace("@", "@\u200b").replace("<!--", "<\u200b!--")
-
     partes = ["## " + _cabecera(modelo, proveedor, ruta),
               "Commit contrastado: `%s`. [Ejecución de Actions](%s)." % (cabeza, url),
               "Análisis por lectura, sin ejecutar tests ni aplicar parches. "
@@ -424,10 +425,11 @@ def renderizar(respuestas, fuentes, modelo, cabeza, url, proveedor="mistral", ru
         partes += [marca_fuente(f["id"], cabeza),
             "### %s" % VEREDICTOS[r["veredicto"]],
             "Sobre el [comentario de %s](%s)." % (f["user"]["login"], f["html_url"]),
-            texto_modelo(r["explicacion"], 3500)]
+            mr._codigo(r["explicacion"], 3500)]
         for c in r["evidencia"]:
-            partes.append("- `%s` (%s): `%s`" % (mr._linea(c["archivo"], 200),
-                c["version"], texto_modelo(c["fragmento"], 1000).replace("`", "'")))
+            fragmento = mr._codigo(c["fragmento"], 1000, neutralizar_menciones=False)
+            partes.append("- %s (%s): %s" % (mr._codigo(c["archivo"], 200),
+                c["version"], fragmento))
     partes.append("Las citas validan ubicación; el dictamen del modelo requiere revisión humana.")
     # Como el informe de la revisión: un secreto que el modelo repita no se publica.
     return mr.mask_secrets("\n\n".join(partes))
