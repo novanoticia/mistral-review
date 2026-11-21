@@ -76,7 +76,10 @@ Actions, y si no se puede leer el historial se revisa igualmente.
 - Guía `REVIEW.md`, o `CLAUDE.md` si no existe la primera; máximo 60.000
   caracteres, que hoy cubren `CLAUDE.md` entero (con 20.000 se quedaba fuera
   casi la mitad). Si algún día se recorta, el modelo recibe el aviso.
-- Título, descripción y diff con diez líneas de contexto, hasta 150.000 caracteres.
+- Título y diff con diez líneas de contexto, hasta 150.000 caracteres de diff.
+- La revisión automática solo envía texto de la descripción si el repositorio
+  configura `include_description: true` en el workflow que la llama. En ese
+  caso, se envían hasta 4.000 caracteres y se aplica el filtro habitual de secretos.
 - Contexto de los archivos Python cambiados, leído con `git show` del commit:
   **las funciones completas de la versión nueva que contienen las líneas
   cambiadas**, con sus números de línea (un método va sin el resto de su

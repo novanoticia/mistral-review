@@ -30,6 +30,10 @@ on:
         description: Archivos de guía del proyecto, por orden de preferencia; vacío = REVIEW.md, AGENTS.md, CLAUDE.md
         type: string
         default: ""
+      include_description:
+        description: Enviar la descripción del PR al proveedor del modelo
+        type: boolean
+        default: false
       ref:
         description: Rama o etiqueta de novanoticia/mistral-review cuyo script se ejecuta; debe coincidir con la de `uses:`
         type: string
@@ -91,5 +95,6 @@ jobs:
           MISTRAL_OPENROUTER_PROVEEDOR: ${{ inputs.openrouter_provider }}
           MISTRAL_EXCLUIDOS: ${{ inputs.excluded }}
           MISTRAL_GUIAS: ${{ inputs.guides }}
+          MISTRAL_INCLUIR_DESCRIPCION: ${{ inputs.include_description }}
           GH_TOKEN: ${{ github.token }}
         run: python3 .mistral-review/scripts/mistral_review.py

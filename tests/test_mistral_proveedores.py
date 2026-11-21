@@ -596,6 +596,16 @@ class TestWorkflowsConProveedor(unittest.TestCase):
                 otros = [p for p in flujo["jobs"][trabajo]["steps"] if p is not paso]
                 self.assertFalse(any("OPENROUTER_API_KEY" in json.dumps(p) for p in otros))
 
+    def test_revision_solo_acepta_incluir_descripcion_con_una_entrada_opcional(self):
+        flujo = self.cargar(".github/workflows/review.yml")
+        entrada = flujo[True]["workflow_call"]["inputs"]["include_description"]
+        self.assertEqual(entrada["type"], "boolean")
+        self.assertIs(entrada["default"], False)
+        paso = next(p for p in flujo["jobs"]["mistral-review"]["steps"]
+                    if "mistral_review.py" in p.get("run", ""))
+        self.assertEqual(paso["env"]["MISTRAL_INCLUIR_DESCRIPCION"],
+                         "${{ inputs.include_description }}")
+
     def test_los_ejemplos_pasan_entradas_y_secretos_que_existen(self):
         for ejemplo, nombre in (("mistral-review.yml", "review.yml"),
                                 ("mistral-reply.yml", "reply.yml"),

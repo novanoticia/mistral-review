@@ -52,7 +52,13 @@ Para revisar con un modelo de OpenRouter en vez de Mistral, ver
 | `openrouter_provider` | Solo con OpenRouter: proveedor final fijo (p. ej. `z-ai`) | vacío = lo elige OpenRouter |
 | `excluded` | Archivos que no se revisan (generados), uno por línea | ninguno |
 | `guides` | Archivos de guía, por orden de preferencia | `REVIEW.md`, `AGENTS.md`, `CLAUDE.md` |
+| `include_description` | Enviar hasta 4.000 caracteres de la descripción del PR en la revisión automática | `false` |
 | `ref` | Rama o etiqueta de este repo cuyo script se ejecuta | `main` |
+
+La revisión automática omite el texto de la descripción del PR por defecto.
+Para incluirlo, añade `include_description: true` al bloque `with:` del
+workflow de revisión de tu repositorio. El título, el diff, la guía y el
+contexto siguen enviándose al proveedor configurado.
 
 `ref` debe coincidir con lo que pongas tras `@` en `uses:` (por ejemplo `@v1`
 y `ref: v1`): así un cambio aquí no llega a todos los repos sin control.
@@ -195,8 +201,9 @@ Fijo, no se elige:
 
 ### Privacidad, costes y límites
 
-- **Privacidad.** El diff, la guía y el contexto del PR pasan por **dos
-  empresas**: OpenRouter y el proveedor final, cada una con sus condiciones.
+- **Privacidad.** El título, el diff, la guía y el contexto del PR pasan por
+  **dos empresas**: OpenRouter y el proveedor final, cada una con sus
+  condiciones. Si activas `include_description`, también pasa la descripción.
   `data_collection: "deny"` filtra según lo que OpenRouter sabe de cada
   proveedor, que según su propia documentación no es definitivo. Los secretos
   evidentes se tachan antes de enviar, igual que con Mistral.
