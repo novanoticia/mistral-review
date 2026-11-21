@@ -17,8 +17,12 @@ comprobarlos antes de actuar.
 - Tacha secretos evidentes (`api_key = …`, `token: …`, `password=…`) antes de
   enviar nada a Mistral y antes de publicar.
 - Pide un JSON con hallazgos (archivo, cita literal, escenario, arreglo) y de 1
-  a 6 comprobaciones. Una cita vale si es una línea completa del diff o varias
-  líneas seguidas de un mismo hunk; si no, la revisión se rechaza.
+  a 6 comprobaciones. Cada hallazgo debe citar una línea completa del diff o
+  varias líneas seguidas de un mismo bloque de cambios. Una cita inválida de
+  un hallazgo hace que se rechace la respuesta.
+- Cada comprobación «revisado» cita una línea añadida o eliminada completa de
+  su archivo en el diff enviado. Si falta una cita válida, la comprobación
+  queda «pendiente» y se conservan los demás resultados válidos.
 - Si la respuesta llega mal formada o cortada por `length`, la pide una vez más.
   Si la segunda tampoco vale, el comentario nombra la regla incumplida (solo su
   código, nunca el contenido de la respuesta).

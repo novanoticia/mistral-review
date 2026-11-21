@@ -27,7 +27,7 @@ HALLAZGO = {"severidad": "media", "archivo": "a.py", "fragmento": "x = `1`",
             "arreglo": "conservar la marca"}
 COMPROBACION = {"archivo": "a.py", "escenario": "entrada vacía",
                "conclusion": "la guarda devuelve error antes de escribir",
-               "estado": "revisado"}
+               "estado": "revisado", "fragmento": "x = `1`"}
 
 
 class TestDiff(unittest.TestCase):
@@ -450,20 +450,46 @@ class TestMain(unittest.TestCase):
         self.assertEqual(codigo, 1)
         self.assertIn("Revisión no válida", cuerpo)
 
-    def test_revisado_exige_linea_de_cambio_completa_en_el_diff_enviado(self):
+    def test_una_cita_recortada_deja_la_comprobacion_pendiente(self):
         diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
-                "@@ -1 +1,2 @@\n contexto = 0\n+valor = 1\n")
-        for estado, esperado in (("revisado", 1), ("pendiente", 0)):
-            respuesta = {"resumen": "R", "hallazgos": [],
-                         "comprobaciones": [dict(COMPROBACION, estado=estado)]}
-            with self.subTest(estado=estado), mock.patch.object(self, "DIFF", diff), \
-                    mock.patch.object(mr, "MAX_DIFF", len(diff) - 1):
+                "@@ -1 +1,3 @@\n contexto = 0\n+visible = 1\n+recortado = 2\n")
+        respuesta = {"resumen": "R", "hallazgos": [], "comprobaciones": [
+            dict(COMPROBACION, fragmento="recortado = 2")]}
+        with mock.patch.object(self, "DIFF", diff), mock.patch.object(mr, "MAX_DIFF", len(diff) - 1):
+            codigo, cuerpo = self.ejecutar(json.dumps(respuesta))
+        self.assertEqual(codigo, 0)
+        self.assertIn("Comprobaciones por lectura pendientes (1)", cuerpo)
+        self.assertNotIn("recortado = 2", cuerpo)
+
+    def test_el_informe_solo_muestra_citas_de_cambios_del_archivo_indicado(self):
+        diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+                "@@ -1,2 +1,3 @@\n contexto = True\n-x = 0\n+x = `1`\n+password=dato-ficticio\n"
+                "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n"
+                "@@ -0,0 +1 @@\n+otro_archivo = True\n")
+        casos = (("+x = `1`", True), ("x = 0", True), (None, False), ([], False),
+                 ("x = `", False), ("contexto = True", False), ("otro_archivo = True", False),
+                 ("password=***", True), ("password=dato-ficticio", False),
+                 ("x = 0\nx = `1`", False))
+        for fragmento, valida in casos:
+            comprobacion = dict(COMPROBACION)
+            if fragmento is None:
+                del comprobacion["fragmento"]
+            else:
+                comprobacion["fragmento"] = fragmento
+            respuesta = {"resumen": "R", "hallazgos": [], "comprobaciones": [comprobacion]}
+            with self.subTest(fragmento=fragmento), mock.patch.object(self, "DIFF", diff):
                 codigo, cuerpo = self.ejecutar(json.dumps(respuesta))
-                self.assertEqual(codigo, esperado)
-                if estado == "revisado":
-                    self.assertIn("comprobacion_0_sin_cambio_visible", cuerpo)
+                self.assertEqual(codigo, 0)
+                self.assertNotIn("dato-ficticio", cuerpo)
+                if valida:
+                    self.assertIn("**revisado**", cuerpo)
+                    self.assertIn("Fragmento: " + mr._codigo(fragmento), cuerpo)
+                    self.assertIn(COMPROBACION["conclusion"], cuerpo)
                 else:
-                    self.assertIn("Comprobaciones por lectura pendientes (1)", cuerpo)
+                    self.assertIn("**pendiente**", cuerpo)
+                    self.assertIn("Falta una cita verificable", cuerpo)
+                    self.assertNotIn("Fragmento", cuerpo)
+                    self.assertNotIn(COMPROBACION["conclusion"], cuerpo)
 
     def test_diff_vacio_no_consulta_api_ni_exige_casos_inventados(self):
         with mock.patch.object(self, "DIFF", ""):

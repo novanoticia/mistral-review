@@ -44,12 +44,15 @@ class TestMetadatosMistral(unittest.TestCase):
         self.assertEqual(rutas, {ruta})
         datos = {"resumen": "Cambio sin líneas de código",
                  "hallazgos": [], "comprobaciones": [dict(COMPROBACION, archivo=ruta)]}
-        diagnostico = []
-        self.assertIsNone(mr.interpretar(json.dumps(datos), diff, True, rutas,
-                                         diagnostico=diagnostico))
-        self.assertEqual(diagnostico, ["comprobacion_0_sin_cambio_visible"])
+        validadas = []
+        self.assertIsNotNone(mr.interpretar(json.dumps(datos), diff, True, rutas,
+                                           comprobaciones_validadas=validadas))
+        self.assertEqual(validadas[0]["estado"], "pendiente")
+        self.assertNotIn("fragmento", validadas[0])
         datos["comprobaciones"][0]["estado"] = "pendiente"
-        self.assertIsNotNone(mr.interpretar(json.dumps(datos), diff, True, rutas))
+        self.assertIsNotNone(mr.interpretar(json.dumps(datos), diff, True, rutas,
+                                           comprobaciones_validadas=validadas))
+        self.assertEqual(validadas[0]["conclusion"], COMPROBACION["conclusion"])
         datos["comprobaciones"][0]["archivo"] = "inventado.py"
         self.assertIsNone(mr.interpretar(json.dumps(datos), diff, True, rutas))
         # El inventario permite describir el cambio, nunca citar líneas inexistentes.
@@ -74,7 +77,8 @@ class TestMetadatosMistral(unittest.TestCase):
             evento.write_text(json.dumps({"pull_request": {"number": 7,
                 "base": {"sha": base}, "head": {"sha": cabeza}}}), encoding="utf-8")
             respuesta = json.dumps({"resumen": "Renombra el archivo",
-                "hallazgos": [], "comprobaciones": [dict(COMPROBACION, archivo=nueva, estado="pendiente")]})
+                "hallazgos": [], "comprobaciones": [dict(COMPROBACION, archivo=nueva,
+                                                        fragmento="resultado = 1")]})
             with mock.patch.dict(os.environ, {"MISTRAL_API_KEY": "simulada", "GH_TOKEN": "",
                     "GITHUB_EVENT_PATH": str(evento), "GITHUB_REPOSITORY": "o/r",
                     "GITHUB_STEP_SUMMARY": str(raiz / "resumen.md")}), \
@@ -82,7 +86,7 @@ class TestMetadatosMistral(unittest.TestCase):
                     mock.patch.object(mr, "publicar") as publicar, \
                     mock.patch("builtins.print"):
                 self.assertEqual(mr.main(), 0)
-            self.assertIn("Comprobaciones por lectura", publicar.call_args.args[2])
+            self.assertIn("Comprobaciones por lectura pendientes (1)", publicar.call_args.args[2])
 
     def test_cambio_solo_de_permisos(self):
         with self.repositorio() as raiz:
@@ -124,8 +128,12 @@ class TestMetadatosMistral(unittest.TestCase):
                 diff = mr.obtener_diff(base, cabeza)
             self.assertEqual(rutas, {"borrado.py"})
             datos = {"resumen": "Archivo eliminado", "hallazgos": [],
-                     "comprobaciones": [dict(COMPROBACION, archivo="borrado.py")]}
-            self.assertIsNotNone(mr.interpretar(json.dumps(datos), diff, True, rutas))
+                     "comprobaciones": [dict(COMPROBACION, archivo="borrado.py",
+                                             fragmento="resultado = 1")]}
+            validadas = []
+            self.assertIsNotNone(mr.interpretar(json.dumps(datos), diff, True, rutas,
+                                               comprobaciones_validadas=validadas))
+            self.assertEqual(validadas, datos["comprobaciones"])
 
 
 if __name__ == "__main__":

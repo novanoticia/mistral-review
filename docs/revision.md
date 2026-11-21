@@ -91,12 +91,14 @@ Actions, y si no se puede leer el historial se revisa igualmente.
   cada archivo, que en `triage_helpers.py` era solo el docstring.
 - Entre una y seis comprobaciones con archivo, escenario, conclusión y estado
   `revisado` o `pendiente`. Son razonamientos por lectura, no pruebas ejecutadas.
-  El inventario de Git valida la ruta. `revisado` exige al menos una línea
-  añadida o eliminada completa del archivo en el diff enviado. `pendiente`
-  admite cambios sin líneas visibles, incluidos renombrados puros, cambios
-  de permisos y binarios. La comprobación de visibilidad se aplica también
-  en las evaluaciones históricas. La conclusión sigue siendo un juicio del
-  modelo.
+  El inventario de Git valida la ruta. `revisado` exige que `fragmento` cite
+  una línea añadida o eliminada completa del mismo archivo en el diff enviado.
+  El informe muestra la cita que supera la comprobación. Si falta o no
+  coincide, el revisor marca el caso `pendiente` y explica el motivo. Así
+  también se tratan los casos sin líneas de cambio visibles, como renombrados
+  puros, cambios de permisos y binarios. La regla se aplica también a las
+  nuevas evaluaciones históricas. La cita acredita la ubicación. La conclusión
+  sigue siendo un juicio del modelo.
 - Hallazgos solo con escenario concreto y una cita literal del diff del archivo.
   Se admite que no haya hallazgos; una respuesta sin comprobaciones es inválida.
 - La cita es una línea completa del diff (sangría y prefijo libres) o, desde
