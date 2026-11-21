@@ -1,0 +1,38 @@
+# Revisa con Mistral los PR de este mismo repo. Llama a la versión estable
+# publicada, no a la del PR: el script que se ejecuta con la clave es siempre
+# el de una etiqueta fusionada. La excepción es un PR que edite este archivo,
+# porque GitHub usa el workflow de la rama del PR: revisa ese cambio a mano.
+# Sin el secreto MISTRAL_API_KEY la revisión se omite y lo dice en el resumen.
+name: Mistral PR Review
+
+on:
+  pull_request:
+    types: [ready_for_review, opened, synchronize, reopened, edited]
+
+# Un push nuevo cancela la revisión anterior del mismo PR.
+concurrency:
+  group: mistral-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  mistral-review:
+    permissions:
+      pull-requests: write
+      contents: read
+    uses: novanoticia/mistral-review/.github/workflows/review.yml@v1.4
+    with:
+      # Debe coincidir con la etiqueta de `uses:`. Al publicar una versión nueva,
+      # cambia las dos a la vez (ver README, «Al publicar una versión»).
+      ref: v1.4
+      # Proveedor (ver README de este repo, «Usar OpenRouter»): sin la variable MISTRAL_PROVIDER,
+      # o con `mistral`, revisa Mistral con MISTRAL_MODEL; con `openrouter`, OpenRouter
+      # con OPENROUTER_MODEL. Cambiar de proveedor = cambiar solo MISTRAL_PROVIDER.
+      model: ${{ vars.MISTRAL_PROVIDER == 'openrouter' && vars.OPENROUTER_MODEL || vars.MISTRAL_PROVIDER != 'openrouter' && vars.MISTRAL_MODEL || '' }}
+      provider: ${{ vars.MISTRAL_PROVIDER }}
+      openrouter_provider: ${{ vars.OPENROUTER_PROVIDER }}
+      # Archivos generados que no merece la pena revisar (opcional):
+      # excluded: |
+      #   tests/golden/**
+    secrets:
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

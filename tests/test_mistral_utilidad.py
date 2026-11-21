@@ -11,6 +11,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -90,6 +91,9 @@ class TestRangos(unittest.TestCase):
         self.assertEqual(inicio, N_CONSTANTE - mr.VENTANA)
         self.assertLessEqual(fin, len(LINEAS))
 
+    # El revisor exige Python 3.12+ (review.yml y reply.yml): el parser de 3.11
+    # agota la recursión con estas expresiones y devuelve None.
+    @unittest.skipIf(sys.version_info < (3, 12), "requiere Python 3.12 o posterior")
     def test_expresion_muy_profunda_no_agota_la_recursion(self):
         fuente = "def f():\n    return " + " + ".join("v%d" % i for i in range(3000)) + "\n"
         self.assertEqual(mr._rangos_python(fuente, {2}), [(1, 2, "f")])

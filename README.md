@@ -259,11 +259,14 @@ variable `MISTRAL_REPLY_MODEL` para probar otro modelo de Mistral solo aquí
 puede lanzar a mano (**Actions → Mistral Reply to AI Reviews → Run workflow**)
 con el número del PR y el id del comentario.
 
-Este repo lo usa en sus propios PR con
+Este repo revisa y contrasta sus propios PR con
+[`.github/workflows/mistral-review.yml`](.github/workflows/mistral-review.yml) y
 [`.github/workflows/mistral-reply.yml`](.github/workflows/mistral-reply.yml),
-fijado en la última versión estable y no en la rama del PR: así el código sin
-fusionar nunca se ejecuta con la clave. Sin el secreto `MISTRAL_API_KEY` en
-este repo, el contraste se omite y lo indica en el resumen de Actions.
+fijados en la última versión estable y no en la rama del PR: el script que se
+ejecuta con la clave es el de una etiqueta publicada. La excepción es un PR que
+edite esos dos archivos, porque en `pull_request` GitHub toma el workflow de la
+rama del PR; ese cambio se revisa a mano. Sin el secreto `MISTRAL_API_KEY` en
+este repo, revisión y contraste se omiten y lo indican en el resumen de Actions.
 
 Procede de `email-triage-plugin`; su historia y sus límites están en el
 docstring de [`scripts/mistral_reply.py`](scripts/mistral_reply.py).
@@ -292,7 +295,29 @@ de forks no reciben el secreto: la revisión se omite sin fallar.
 python3 -m unittest discover -s tests -t .
 ```
 
-Solo biblioteca estándar de Python, sin red ni API en los tests.
+Solo biblioteca estándar de Python, sin red ni API en los tests. El revisor
+exige Python 3.12 o posterior; con 3.11 se salta la prueba que lo necesita.
+
+### Al publicar una versión
+
+Los repos que fijan una etiqueta no reciben la versión nueva hasta que se
+cambie a mano. Tras publicar la *release* (por ejemplo `v1.5`), en cada archivo
+de esta lista cambia lo que va tras `@` en `uses:` y el valor de `ref:` a la
+nueva etiqueta, las dos a la vez:
+
+| Repo | Archivos en `.github/workflows/` |
+|---|---|
+| `mistral-review` (este) | `mistral-review.yml`, `mistral-reply.yml` |
+| `email-triage-plugin` | `mistral-review.yml`, `mistral-reply.yml`, `mistral-eval.yml` |
+| `claude-skills-exporter` | `mistral-review.yml`, `mistral-reply.yml` |
+| `multilang-repo-skill` | `mistral-review.yml`, `mistral-reply.yml` |
+| `repo-auditor-ia` | `mistral-review.yml`, `mistral-reply.yml` |
+
+Para comprobar que no queda ninguna referencia antigua en un repo, busca la
+etiqueta anterior (por ejemplo `v1.4`) en su carpeta `.github/`. En este repo,
+`test_los_workflows_propios_fijan_la_misma_version` falla si `uses:` y `ref:`
+no coinciden o si los dos workflows apuntan a versiones distintas. Si añades
+el revisor a un repo nuevo, añádelo también a esta tabla.
 
 Procedencia: fusiona las cuatro copias que tenían `email-triage-plugin`
 (base), `claude-skills-exporter`, `multilang-repo-skill` y `repo-auditor-ia`
