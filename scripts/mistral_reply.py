@@ -192,8 +192,12 @@ def fragmento_git(sha, ruta, linea):
     lineas = texto.splitlines()
     # Lo que se envía y lo que valida las citas sale de las mismas líneas
     # tachadas (revisión Codex, mistral-review#3): el AST usa el original solo
-    # para encontrar la función. `mask_secrets` no cruza saltos de línea.
-    tachadas = [mr.mask_secrets(l) for l in lineas]
+    # para encontrar la función. Se tacha el texto entero, no línea a línea:
+    # el cuerpo de una clave PEM solo se reconoce tras su línea BEGIN. Ninguna
+    # regla cambia el número de líneas; si alguna lo hiciera, línea a línea.
+    tachadas = mr.mask_secrets("\n".join(lineas)).split("\n")
+    if len(tachadas) != len(lineas):
+        tachadas = [mr.mask_secrets(l) for l in lineas]
     punto = min(max(int(linea or 1), 1), max(len(lineas), 1))
     inicio, fin = max(0, punto - 61), min(len(lineas), punto + 60)
     if ruta.endswith(".py"):

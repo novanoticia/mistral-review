@@ -331,6 +331,19 @@ class TestLecturaGitMistral(unittest.TestCase):
                 returncode=0, stdout=b"\0binario")):
             self.assertIsNone(reply.fragmento_git(SHA, "a.bin", 1))
 
+    def test_el_fragmento_tacha_una_clave_pem_de_varias_lineas(self):
+        # Tachadas línea a línea, las del cuerpo no se reconocían: solo tras BEGIN.
+        cuerpo = "MIIEow" + "IBAAKCAQEA" * 4
+        fuente = ('CLAVE = """-----BEGIN ' + "RSA PRIVATE KEY-----\n%s\n%s==\n"
+                  '-----END RSA PRIVATE KEY-----"""\nx = 1\n' % (cuerpo, cuerpo[:24]))
+        with mock.patch.object(reply.subprocess, "run", return_value=mock.Mock(
+                returncode=0, stdout=fuente.encode("utf-8"))):
+            fragmento = reply.fragmento_git(SHA, "a.py", 5)
+        self.assertNotIn(cuerpo[:24], fragmento["texto"])
+        self.assertEqual(fragmento["texto"].split("\n")[1:3], ["***", "***"])
+        self.assertIn("x = 1", fragmento["lineas"])
+        self.assertEqual(fragmento["hasta"] - fragmento["desde"] + 1, 5)
+
     def test_diff_no_atribuye_lineas_eliminadas_a_cabeza(self):
         diff = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-return False\n+return True\n"
         sin_path = dict(FUENTE)
