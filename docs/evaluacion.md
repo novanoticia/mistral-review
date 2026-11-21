@@ -125,7 +125,7 @@ Si el JSON está mal formado, se guardan el motivo y la longitud.
 La evaluación usa el secreto `MISTRAL_API_KEY` y la variable
 `MISTRAL_MODEL` del repositorio, igual que el revisor. Con OpenRouter usa el secreto
 `OPENROUTER_API_KEY` y las variables `MISTRAL_PROVIDER` y, opcional,
-`OPENROUTER_PROVIDER` ([README](../README.md#usar-openrouter-opcional)).
+`OPENROUTER_PROVIDER` ([docs/openrouter.md](openrouter.md)).
 
 Si la API indica `length`, se agotó el margen de salida y se puede hacer un
 segundo intento. El campo `cortes_salida` cuenta esos cortes aunque la siguiente
