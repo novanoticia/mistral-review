@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import re
 import os
 import subprocess
 import tempfile
@@ -873,7 +874,8 @@ class TestMain(unittest.TestCase):
         self.assertEqual(parcial["resultados"], artefacto["resultados"])
         mensajes = json.loads(abrir.call_args.args[0].data)["messages"]
         bloque_guia = mensajes[1]["content"].split("\n\n## Título\n", 1)[0]
-        texto_enviado = bloque_guia.split("\n", 1)[1]
+        # Encabezado y marca de apertura fuera: queda solo el texto de la guía.
+        texto_enviado = bloque_guia.split("\n", 2)[2].rsplit("\n<<<FIN ", 1)[0]
         self.assertIn('api_key = "***"', texto_enviado)
         self.assertNotIn("Segunda regla", texto_enviado)
         self.assertEqual(artefacto["resultados"]["n"][0]["cobertura"]["guia"], {
@@ -928,7 +930,11 @@ class TestMain(unittest.TestCase):
         mensajes_auxiliares = peticion_auxiliar.pop("messages")
         self.assertEqual(peticion_base, peticion_auxiliar)
         self.assertEqual(mensajes_base[0], mensajes_auxiliares[0])
-        usuario_base, usuario_auxiliar = mensajes_base[1]["content"], mensajes_auxiliares[1]["content"]
+        # El código de las marcas sale del contenido y el contexto cambia entre
+        # modos: se compara el texto con las marcas normalizadas.
+        usuario_base, usuario_auxiliar = (
+            re.sub(r"<<<(DATOS|FIN) [0-9a-f]{16}>>>", r"<<<\1>>>", m[1]["content"])
+            for m in (mensajes_base, mensajes_auxiliares))
         self.assertEqual(usuario_base.split("\n\n## Contexto adicional", 1)[0],
                          usuario_auxiliar.split("\n\n## Contexto adicional", 1)[0])
         self.assertEqual(usuario_base.split("\n\n## Diff", 1)[1], usuario_auxiliar.split("\n\n## Diff", 1)[1])
