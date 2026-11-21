@@ -136,6 +136,66 @@ class TestObjetivos(unittest.TestCase):
         self.assertEqual(destino, {"a.py": [(5, 7, "rota")]})   # ni tests ni ignorados
         self.assertEqual(destino_excluido, {})
 
+    def test_archivos_objetivo_evalua_shell_yaml_y_markdown(self):
+        # repo-auditor-ia no tiene Python: sin `archivos_objetivo` no había
+        # objetivo; con él, la función de shell y las líneas del resto. Sin
+        # el campo, el mismo arreglo sigue sin objetivo (casos anteriores igual).
+        with tempfile.TemporaryDirectory() as d:
+            def git(*a):
+                return subprocess.run(["git", "-C", d] + list(a), check=True,
+                                      capture_output=True, text=True).stdout.strip()
+
+            def escribir(nombre, texto):
+                os.makedirs(os.path.dirname(os.path.join(d, nombre)) or d, exist_ok=True)
+                with open(os.path.join(d, nombre), "w") as fh:
+                    fh.write(texto)
+
+            git("init", "-q")
+            git("config", "user.email", "t@t"); git("config", "user.name", "t")
+            guion = ("#!/usr/bin/env bash\nset -u\nestado() {\n"
+                     "  if [ \"$1\" -ge 1 ]; then echo ok\n  else echo fallo; fi\n}\n")
+            escribir("recon", guion)
+            escribir("flujo.yml", "a: 1\nb: mal\nc: 3\n")
+            escribir("guia.md", "# Guía\n\nTexto viejo.\n")
+            escribir("otro.sh", "x=1\n")
+            git("add", "-A"); git("commit", "-qm", "defecto")
+            cabeza = git("rev-parse", "HEAD")
+            escribir("recon", guion.replace("-ge 1", "-le 1"))
+            escribir("flujo.yml", "a: 1\nb: bien\nc: 3\n")
+            escribir("guia.md", "# Guía\n\nTexto nuevo.\n")
+            escribir("otro.sh", "x=2\n")
+            git("commit", "-qam", "arreglo")
+            caso = dict(POSITIVO, cabeza=cabeza, arreglo=git("rev-parse", "HEAD"),
+                        archivos_objetivo=["recon", "flujo.yml", "guia.md"])
+            sin_campo = {k: v for k, v in caso.items() if k != "archivos_objetivo"}
+            viejo = os.getcwd()
+            try:
+                os.chdir(d)
+                with mock.patch.dict(os.environ, {"MISTRAL_EXCLUIDOS": ""}):
+                    destino = ev.objetivos(caso)
+                    destino_sin_campo = ev.objetivos(sin_campo)
+            finally:
+                os.chdir(viejo)
+        # Fuera de una función, la línea cambiada y la anterior: una línea
+        # eliminada cuenta con las dos que la rodean (`mr.lineas_cambiadas`).
+        self.assertEqual(destino, {"recon": [(3, 6, "estado")],   # shebang: función de shell
+                                   "flujo.yml": [(1, 2, "")],
+                                   "guia.md": [(2, 3, "")]})      # otro.sh no se pidió
+        self.assertEqual(destino_sin_campo, {})
+
+    def test_archivos_objetivo_se_valida(self):
+        for caso, mensaje in (
+                (dict(POSITIVO, archivos_objetivo="recon.sh"), "no es una lista de rutas"),
+                (dict(NEGATIVO, archivos_objetivo=["a.py"]), "solo admite un positivo")):
+            with self.subTest(mensaje=mensaje), tempfile.NamedTemporaryFile(
+                    "w", suffix=".json", delete=False) as fh:
+                json.dump([caso], fh)
+            try:
+                with self.assertRaisesRegex(ValueError, mensaje):
+                    ev.cargar_casos(fh.name)
+            finally:
+                os.unlink(fh.name)
+
     def test_negativo_apunta_a_sus_archivos(self):
         self.assertEqual(ev.objetivos(NEGATIVO), {"a.py": []})
 

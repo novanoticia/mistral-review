@@ -155,10 +155,11 @@ commits del historial del propio repo:
 - **control**: un defecto evidente que cualquier revisor debería ver.
 
 Necesita, además del workflow, los casos en `.github/eval/casos.json`
-(plantilla: [`ejemplos/eval-casos.json`](ejemplos/eval-casos.json)). Hoy un
-caso positivo solo es evaluable si su arreglo toca **código Python**: de ahí
-se deriva el objetivo con el que se comparan las citas. En repos de shell,
-YAML o Markdown, el listado lo rechaza («positivo sin objetivo derivable»). Se lanza
+(plantilla: [`ejemplos/eval-casos.json`](ejemplos/eval-casos.json)). Por
+defecto, el objetivo con el que se comparan las citas sale del **código
+Python** que tocó el arreglo. En repos de shell, YAML o Markdown, añade al
+caso `archivos_objetivo` con los archivos del defecto; sin él, el listado lo
+rechaza («positivo sin objetivo derivable»). Se lanza
 desde **Actions → Mistral Eval → Run workflow**, donde eliges repeticiones,
 casos, modelo y esfuerzo. Método, cómo elegir los casos y resultados medidos:
 [docs/evaluacion.md](docs/evaluacion.md).
