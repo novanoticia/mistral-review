@@ -458,6 +458,8 @@ class TestMain(unittest.TestCase):
             codigo, cuerpo = self.ejecutar(json.dumps(respuesta))
         self.assertEqual(codigo, 0)
         self.assertIn("Comprobaciones por lectura pendientes (1)", cuerpo)
+        self.assertIn("**Revisión inconclusa.**", cuerpo)
+        self.assertNotIn("Sin hallazgos", cuerpo)
         self.assertNotIn("recortado = 2", cuerpo)
 
     def test_el_informe_solo_muestra_citas_de_cambios_del_archivo_indicado(self):

@@ -413,6 +413,14 @@ class TestInforme(unittest.TestCase):
         self.assertIn("**Sin hallazgos.**", md)
         md = mr.renderizar(("R", []), "m", 10, False, comprobaciones=COMPROBACIONES[1:])
         self.assertNotIn("<details>", md)
+        self.assertIn("**Revisión inconclusa.**", md)
+        self.assertNotIn("Sin hallazgos", md)
+
+    def test_muestra_hallazgos_aunque_todas_las_comprobaciones_esten_pendientes(self):
+        md = mr.renderizar(("R", [HALLAZGO]), "m", 10, False, comprobaciones=COMPROBACIONES[1:])
+        self.assertIn("### Hallazgos (1)", md)
+        self.assertIn("falta ver cargar()", md)
+        self.assertNotIn("Revisión inconclusa", md)
 
     def test_la_marca_de_valido_solo_va_en_informes_validos(self):
         marca = mr.MARCA_OK % ("b1", "c1")

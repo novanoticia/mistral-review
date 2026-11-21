@@ -1198,13 +1198,15 @@ def renderizar(resultado, modelo, diff_len, recortado, cabeza="", error=None,
         orden = {"alta": 0, "media": 1, "baja": 2}
         hallazgos = sorted(hallazgos, key=lambda h: orden.get(
             str(h.get("severidad")).lower(), 3))
-        if not hallazgos:
-            partes.append("**Sin hallazgos en la parte revisada.**" if recortado
-                          else "**Sin hallazgos.**")
-        else:
+        if hallazgos:
             partes.append("### Hallazgos (%d)" % len(hallazgos))
             for i, h in enumerate(hallazgos, 1):
                 _render_hallazgo(partes, i, h)
+        elif pendientes and not revisadas:
+            partes.append("**Revisión inconclusa.** Todas las comprobaciones quedaron pendientes.")
+        else:
+            partes.append("**Sin hallazgos en la parte revisada.**" if recortado
+                          else "**Sin hallazgos.**")
 
         def lista(casos):
             for c in casos:
