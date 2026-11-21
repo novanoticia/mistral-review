@@ -293,6 +293,18 @@ class TestRevisar(unittest.TestCase):
                     "lineas_de_cambio": 2, "lineas_de_cambio_visibles": lineas_visibles,
                     "recortado": recortado, "linea_final_incompleta": recortado})
 
+    def test_reintenta_si_el_modelo_da_por_revisado_un_archivo_fuera_del_recorte(self):
+        dif_b = ("diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n"
+                 "@@ -1 +1 @@\n-valor = 0\n+valor = 1\n")
+        respuestas = [json.dumps({"resumen": "R", "hallazgos": [],
+            "comprobaciones": [dict(COMPROBACIONES[0], archivo="b.py", estado=estado)]})
+            for estado in ("revisado", "pendiente")]
+        with mock.patch.object(mr, "MAX_DIFF", len(DIFF)):
+            registro, api = self.revisar(respuestas, diff=DIFF + dif_b, rutas={"a.py", "b.py"})
+        self.assertEqual((registro["estado"], api.call_count), ("valida", 2))
+        self.assertEqual(registro["rechazadas"][0]["detalle"], "comprobacion_0_sin_cambio_visible")
+        self.assertEqual(registro["pendientes"][0]["archivo"], "b.py")
+
     def test_objetivo_fuera_del_recorte_conserva_la_revision_y_el_hallazgo(self):
         referencia = ("diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n"
                       "@@ -1 +1 @@\n-x = 0\n+x = 1\n")

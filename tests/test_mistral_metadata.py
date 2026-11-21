@@ -44,6 +44,11 @@ class TestMetadatosMistral(unittest.TestCase):
         self.assertEqual(rutas, {ruta})
         datos = {"resumen": "Cambio sin líneas de código",
                  "hallazgos": [], "comprobaciones": [dict(COMPROBACION, archivo=ruta)]}
+        diagnostico = []
+        self.assertIsNone(mr.interpretar(json.dumps(datos), diff, True, rutas,
+                                         diagnostico=diagnostico))
+        self.assertEqual(diagnostico, ["comprobacion_0_sin_cambio_visible"])
+        datos["comprobaciones"][0]["estado"] = "pendiente"
         self.assertIsNotNone(mr.interpretar(json.dumps(datos), diff, True, rutas))
         datos["comprobaciones"][0]["archivo"] = "inventado.py"
         self.assertIsNone(mr.interpretar(json.dumps(datos), diff, True, rutas))
@@ -69,7 +74,7 @@ class TestMetadatosMistral(unittest.TestCase):
             evento.write_text(json.dumps({"pull_request": {"number": 7,
                 "base": {"sha": base}, "head": {"sha": cabeza}}}), encoding="utf-8")
             respuesta = json.dumps({"resumen": "Renombra el archivo",
-                "hallazgos": [], "comprobaciones": [dict(COMPROBACION, archivo=nueva)]})
+                "hallazgos": [], "comprobaciones": [dict(COMPROBACION, archivo=nueva, estado="pendiente")]})
             with mock.patch.dict(os.environ, {"MISTRAL_API_KEY": "simulada", "GH_TOKEN": "",
                     "GITHUB_EVENT_PATH": str(evento), "GITHUB_REPOSITORY": "o/r",
                     "GITHUB_STEP_SUMMARY": str(raiz / "resumen.md")}), \
@@ -115,7 +120,12 @@ class TestMetadatosMistral(unittest.TestCase):
             eliminado.unlink()
             cabeza = self.commit()
             with mock.patch.dict(os.environ, {"MISTRAL_EXCLUIDOS": "tests/i18n/*.json"}):
-                self.assertEqual(mr.obtener_rutas_diff(base, cabeza), {"borrado.py"})
+                rutas = mr.obtener_rutas_diff(base, cabeza)
+                diff = mr.obtener_diff(base, cabeza)
+            self.assertEqual(rutas, {"borrado.py"})
+            datos = {"resumen": "Archivo eliminado", "hallazgos": [],
+                     "comprobaciones": [dict(COMPROBACION, archivo="borrado.py")]}
+            self.assertIsNotNone(mr.interpretar(json.dumps(datos), diff, True, rutas))
 
 
 if __name__ == "__main__":

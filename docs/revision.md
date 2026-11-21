@@ -43,6 +43,15 @@ espacios, hasta agotar el margen, y la misma revisión relanzada salió bien
 (repo-auditor-ia#26). Los demás cortes (`model_length`, `error`) no se
 repiten: no mejoran pidiendo otra vez.
 
+**Plazo total de la revisión de PR.** La preparación, las peticiones al
+proveedor y las pausas de los reintentos comparten un plazo de 12 minutos
+desde el inicio del script. Cada espera de red se limita al menor valor
+entre 180 segundos y el tiempo restante. El temporizador del ejecutor Linux
+también puede interrumpir la lectura de una respuesta. Si se agota el plazo
+o una pausa ya no cabe en él, el check falla y guarda el motivo en el resumen
+de Actions antes de intentar publicar el comentario. El job completo dispone
+de 15 minutos, incluida su preparación anterior al script.
+
 **Razonamiento bajo.** `mistral-large-latest` pasó a razonar antes de
 responder y devuelve el contenido en bloques (`thinking` y `text`). En el email-triage-plugin#202, con un margen de 8.000 tokens, los gastó en razonar y no escribió nada:
 esa era la causa de los informes «no completada». Con razonamiento bajo usó
@@ -79,8 +88,12 @@ Actions, y si no se puede leer el historial se revisa igualmente.
   cada archivo, que en `triage_helpers.py` era solo el docstring.
 - Entre una y seis comprobaciones con archivo, escenario, conclusión y estado
   `revisado` o `pendiente`. Son razonamientos por lectura, no pruebas ejecutadas.
-  Sus rutas se contrastan con el inventario de Git, incluidos renombrados puros,
-  cambios de permisos y binarios sin hunks. Esto no valida la verdad del análisis.
+  El inventario de Git valida la ruta. `revisado` exige al menos una línea
+  añadida o eliminada completa del archivo en el diff enviado. `pendiente`
+  admite cambios sin líneas visibles, incluidos renombrados puros, cambios
+  de permisos y binarios. La comprobación de visibilidad se aplica también
+  en las evaluaciones históricas. La conclusión sigue siendo un juicio del
+  modelo.
 - Hallazgos solo con escenario concreto y una cita literal del diff del archivo.
   Se admite que no haya hallazgos; una respuesta sin comprobaciones es inválida.
 - La cita es una línea completa del diff (sangría y prefijo libres) o, desde

@@ -250,7 +250,7 @@ class TestMainConProveedor(unittest.TestCase):
         self.assertEqual(codigo, 0)
         args, kwargs = llamar.call_args
         self.assertEqual(args[1:], ("z-ai/glm-5.3-flash", CLAVE_OR))
-        self.assertEqual(kwargs, {"proveedor": "openrouter", "ruta": "z-ai"})
+        self.assertEqual(kwargs, {"proveedor": "openrouter", "ruta": "z-ai", "plazo": mock.ANY})
         self.assertIn("## Revisión vía OpenRouter (`z-ai/glm-5.3-flash`, proveedor `z-ai`)",
                       cuerpo)
         self.assertNotIn("mistralai", cuerpo)
@@ -260,7 +260,7 @@ class TestMainConProveedor(unittest.TestCase):
             {"MISTRAL_API_KEY": CLAVE_MI}, respuesta=self.VALIDA)
         self.assertEqual(codigo, 0)
         self.assertEqual(llamar.call_args.args[1:], (mr.MODELO, CLAVE_MI))
-        self.assertEqual(llamar.call_args.kwargs, {"proveedor": "mistral", "ruta": ""})
+        self.assertEqual(llamar.call_args.kwargs, {"proveedor": "mistral", "ruta": "", "plazo": mock.ANY})
         self.assertIn("[Mistral AI (@mistralai)](https://github.com/mistralai)", cuerpo)
 
     def test_falta_la_clave_del_proveedor_elegido(self):
