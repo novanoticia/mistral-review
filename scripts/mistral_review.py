@@ -251,17 +251,19 @@ FORMATOS_SECRETOS = (
 )
 # Contraseña en una URL: `esquema://usuario:CONTRASEÑA@host`.
 URL_CON_CREDENCIAL = r"(\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s/:@]+:)(?!\*\*\*@)[^\s/@]+(@)"
-# Cabecera PEM de clave privada y las líneas base64 que la siguen (con o sin
-# el prefijo +, - o espacio del diff), aunque falte el END.
+# Cabecera PEM de clave privada y las líneas que la siguen hechas solo de
+# base64, también la última aunque sea corta (`q2w==`), con o sin el prefijo
+# +, - o espacio del diff, aunque falte el END. Una línea con otra cosa
+# (el END, código) corta el bloque.
 PEM_PRIVADA = (r"(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)"
-               r"((?:\r?\n[+\- ]?[ \t]*[A-Za-z0-9+/=]{16,}[ \t]*)+)")
+               r"((?:\r?\n[+\- ]?[ \t]*[A-Za-z0-9+/=]+[ \t]*(?=\r?\n|$))+)")
 
 
 def _tachar_formatos(texto):
     """Tacha tokens con formato conocido, claves PEM y contraseñas en URLs."""
     # Solo el base64: el prefijo +, - o espacio del diff se conserva.
     texto = re.sub(PEM_PRIVADA, lambda m: m.group(1) + re.sub(
-        r"(\n[+\- ]?[ \t]*)[A-Za-z0-9+/=]{16,}", r"\1***", m.group(2)), texto)
+        r"(\n[+\- ]?[ \t]*)[A-Za-z0-9+/=]+", r"\1***", m.group(2)), texto)
     for patron in FORMATOS_SECRETOS:
         texto = re.sub(patron, lambda m: m.group(1) + "***", texto)
     return re.sub(URL_CON_CREDENCIAL, lambda m: m.group(1) + "***" + m.group(2), texto)

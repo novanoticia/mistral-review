@@ -331,6 +331,16 @@ class TestLecturaGitMistral(unittest.TestCase):
                 returncode=0, stdout=b"\0binario")):
             self.assertIsNone(reply.fragmento_git(SHA, "a.bin", 1))
 
+    def test_el_contraste_no_envia_la_descripcion_del_pr(self):
+        descripcion = "Descripcion" + "PrivadaDelAutor"
+        with mock.patch.object(mr, "obtener_diff", return_value=""), \
+                mock.patch.object(mr, "leer_guia", return_value=(None, "")):
+            mensajes, _ = reply.construir_mensajes([dict(FUENTE, path=None)], {
+                "title": "T", "body": descripcion,
+                "base": {"sha": "b" * 40}, "head": {"sha": SHA}})
+        self.assertNotIn(descripcion, mensajes[1]["content"])
+        self.assertIn("(sin descripción)", mensajes[1]["content"])
+
     def test_el_fragmento_tacha_una_clave_pem_de_varias_lineas(self):
         # Tachadas línea a línea, las del cuerpo no se reconocían: solo tras BEGIN.
         cuerpo = "MIIEow" + "IBAAKCAQEA" * 4

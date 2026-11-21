@@ -169,11 +169,11 @@ Se envían al proveedor (Mistral, u OpenRouter y la empresa final):
 
 - el **título** del PR, el **diff** y la **guía** del proyecto;
 - las **funciones completas** (Python y shell) que contienen los cambios;
-- en el contraste, además, el **texto de los comentarios** contrastados, los
-  fragmentos de código que citan y la **descripción** del PR.
+- en el contraste, además, el **texto de los comentarios** contrastados y los
+  fragmentos de código que citan.
 
-La revisión **no envía la descripción** del PR. Antes de enviar nada, y otra
-vez antes de publicar:
+Ni la revisión ni el contraste envían la **descripción** del PR. Antes de
+enviar nada, y otra vez antes de publicar:
 
 - **Se tachan secretos**: asignaciones como `api_key = …`, `token: …` o
   `password=…`; tokens con formato conocido (GitHub, OpenAI, Anthropic,

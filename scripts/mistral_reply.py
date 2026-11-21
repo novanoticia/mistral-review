@@ -291,7 +291,9 @@ def construir_mensajes(fuentes, pr):
     # dejarían pasar el valor al patrón. Va como sección `extra`, entre las
     # mismas marcas que el resto (`mr.bloques_de_datos`), sin tacharse otra vez.
     mensajes, _ = mr.construir_mensajes(
-        pr.get("title"), pr.get("body"), diff, mr.leer_guia(),
+        # Sin la descripción del PR, como la revisión: es texto libre del autor
+        # que no hace falta para contrastar y amplía lo que sale del repo.
+        pr.get("title"), None, diff, mr.leer_guia(),
         extra=[("Fuentes y código parcial", json.dumps(datos, ensure_ascii=False))])
     mensajes[0]["content"] = SISTEMA
     return mensajes, evidencias

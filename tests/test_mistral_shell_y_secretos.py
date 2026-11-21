@@ -165,6 +165,8 @@ class TestSecretos(unittest.TestCase):
         clave = "Cl4ve" + "Priv4da"
         self.assertEqual(mr.mask_secrets("DB=postgres://ana:%s@db:5432/x" % clave),
                          "DB=postgres://ana:***@db:5432/x")
+        self.assertEqual(mr.mask_secrets("DB=postgres://ana:***@db:5432/x"),
+                         "DB=postgres://ana:***@db:5432/x")
         cuerpo = "MIIEow" + "IBAAKCAQEA" * 4
         pem = ("+-----BEGIN " + "RSA PRIVATE KEY-----\n+%s\n+%s==\n"
                "+-----END RSA PRIVATE KEY-----\n+x = 1" % (cuerpo, cuerpo[:20]))
@@ -175,6 +177,12 @@ class TestSecretos(unittest.TestCase):
         self.assertTrue(tachado.endswith("+-----END RSA PRIVATE KEY-----\n+x = 1"))
         # Sin END (diff recortado) el cuerpo también se tacha.
         self.assertNotIn(cuerpo, mr.mask_secrets(pem.split("+-----END")[0]))
+        # La última línea del cuerpo suele ser corta: también se tacha
+        # (revisión de Mistral de mistral-review#24). Una línea que no es
+        # solo base64 corta el bloque y no se toca.
+        corta = "+-----BEGIN " + "PRIVATE KEY-----\n+%s\n+q2w==\n+variable_larga_de_codigo = 3" % cuerpo
+        self.assertEqual(mr.mask_secrets(corta).split("\n")[1:],
+                         ["+***", "+***", "+variable_larga_de_codigo = 3"])
 
     def test_no_tacha_lo_que_solo_se_parece_a_un_secreto(self):
         for linea in ("task-identifier-largo-para-la-prueba-xyz",
