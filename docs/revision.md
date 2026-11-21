@@ -78,7 +78,13 @@ Actions, y si no se puede leer el historial se revisa igualmente.
   como al destino final de un enlace simbólico. La guía elegida se envía con
   un tope de 60.000 caracteres. Si se recorta, el modelo recibe el aviso.
 - Título y diff con diez líneas de contexto, hasta 150.000 caracteres de diff.
-  La revisión automática omite la descripción del PR.
+  La revisión automática omite la descripción del PR. `.env*`, `*.pem`,
+  `*.key` e `id_rsa*` se excluyen siempre (`EXCLUIDOS_SENSIBLES`), además de
+  lo que diga `excluded`.
+- Cada bloque de datos va entre `<<<DATOS código>>>` y `<<<FIN código>>>`. El
+  código es un SHA-256 del contenido: el PR no puede cerrar un bloque antes
+  de tiempo (antes, una línea con tres comillas invertidas cerraba la valla
+  `` ```diff ``), y la misma petición da siempre el mismo código.
 - Contexto de los archivos Python cambiados, leído con `git show` del commit:
   **las funciones completas de la versión nueva que contienen las líneas
   cambiadas**, con sus números de línea (un método va sin el resto de su
@@ -124,7 +130,7 @@ forma de modelo de Mistral, el job falla sin llamar a ninguna API, para no
 cambiar de modelo en silencio. OpenRouter puede responder HTTP 200 con un
 error y sin contenido: cuenta como revisión no completada
 (`error_proveedor`), nunca como «sin hallazgos». Configuración, privacidad y
-costes: [README](../README.md#usar-openrouter-opcional).
+costes: [docs/openrouter.md](openrouter.md#privacidad-costes-y-límites).
 
 ## Cómo se lee el informe
 
