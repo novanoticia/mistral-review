@@ -136,6 +136,10 @@ encontraron defecto. El prompt pide que cada comprobación intente romper el
 cambio con una entrada que los tests del diff no ejerciten, y que cada
 hallazgo sobreviva a un intento de refutación o pase a «pendiente».
 
+Cuando todas las comprobaciones quedan pendientes y no hay hallazgos, el
+informe muestra **Revisión inconclusa** y conserva los escenarios pendientes
+para que puedas comprobarlos a mano o con un test.
+
 La revisión y el contraste muestran las respuestas del modelo como texto
 literal. Las citas de código conservan la arroba de los decoradores y otras
 expresiones. Los enlaces a la ejecución y a los comentarios de origen los
