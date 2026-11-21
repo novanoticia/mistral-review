@@ -619,6 +619,24 @@ class TestWorkflowsConProveedor(unittest.TestCase):
                 # El workflow y el script salen de la misma versión del revisor.
                 self.assertEqual(trabajo["uses"].rsplit("@", 1)[1], trabajo["with"]["ref"])
 
+    def test_los_workflows_propios_fijan_la_misma_version(self):
+        # Este repo se revisa y contrasta con una etiqueta publicada, no con la
+        # rama del PR: workflow y script de la misma versión, y la misma en ambos.
+        versiones = set()
+        for propio, nombre in (("mistral-review.yml", "review.yml"),
+                               ("mistral-reply.yml", "reply.yml")):
+            with self.subTest(workflow=propio):
+                trabajo = next(iter(self.cargar(".github/workflows/" + propio)["jobs"].values()))
+                destino, version = trabajo["uses"].rsplit("@", 1)
+                self.assertEqual(destino, "novanoticia/mistral-review/.github/workflows/" + nombre)
+                self.assertRegex(version, r"^v\d+(\.\d+)*$")
+                self.assertEqual(version, trabajo["with"]["ref"])
+                llamada = self.cargar(".github/workflows/" + nombre)[True]["workflow_call"]
+                self.assertLessEqual(set(trabajo["with"]), set(llamada["inputs"]))
+                self.assertLessEqual(set(trabajo["secrets"]), set(llamada["secrets"]))
+                versiones.add(version)
+        self.assertEqual(len(versiones), 1, versiones)
+
 
 if __name__ == "__main__":
     unittest.main()

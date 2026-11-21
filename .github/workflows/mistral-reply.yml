@@ -2,8 +2,9 @@ name: Mistral Reply to AI Reviews
 
 # Contrasta con Mistral los hallazgos que otras IAs (p. ej. Codex) dejan en los
 # PR de este mismo repo. Llama a la versión estable publicada, no a la del PR:
-# así el código de una rama sin fusionar nunca se ejecuta con la clave. Sin el
-# secreto MISTRAL_API_KEY, el contraste se omite y lo dice en el resumen.
+# el script que se ejecuta con la clave es siempre el de una etiqueta fusionada.
+# La excepción es un PR que edite este archivo en eventos que usan el workflow
+# de la rama del PR. Sin el secreto MISTRAL_API_KEY, el contraste se omite.
 
 on:
   pull_request_review:
@@ -35,7 +36,7 @@ jobs:
     uses: novanoticia/mistral-review/.github/workflows/reply.yml@v1.4
     with:
       # Debe coincidir con la etiqueta de `uses:`. Al publicar una versión nueva,
-      # cambia las dos a la vez.
+      # cambia las dos a la vez (ver README, «Al publicar una versión»).
       ref: v1.4
       # Proveedor (ver README, «Usar OpenRouter»): sin la variable MISTRAL_PROVIDER,
       # o con `mistral`, revisa Mistral con MISTRAL_MODEL; con `openrouter`, OpenRouter
