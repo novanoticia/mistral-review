@@ -63,6 +63,28 @@ Para revisar con un modelo de OpenRouter en vez de Mistral, ver
 `ref` debe coincidir con lo que pongas tras `@` en `uses:` (por ejemplo `@v1`
 y `ref: v1`): así un cambio aquí no llega a todos los repos sin control.
 
+### Comprobar o fijar la versión del revisor
+
+`uses:` decide de qué versión se descarga el workflow y `ref:` de cuál se
+ejecuta el script. Si no coinciden, por ejemplo `@v1.4` sin `ref:`, se mezclan
+el workflow de `v1.4` y el script de `main`. Desde la web de GitHub:
+
+1. En el repo consumidor, abre `.github/workflows/` y entra en el archivo que
+   llama al revisor (`mistral-review.yml`, y también `mistral-reply.yml` o
+   `mistral-eval.yml` si los tienes).
+2. Busca la línea
+   `uses: novanoticia/mistral-review/.github/workflows/….yml@…` y anota lo que
+   va detrás de `@`.
+3. Dentro del bloque `with:` que sigue, busca `ref:`. Si no está, vale `main`.
+4. Para fijar una versión, pulsa el lápiz (**Edit this file**), cambia lo que
+   va tras `@` y el valor de `ref:` a la misma etiqueta (por ejemplo `v1.4`)
+   y añade `ref:` dentro del `with:` existente si faltaba. Repite en cada
+   archivo que llame al revisor y pulsa **Commit changes…**.
+
+Con `@main` el repo recibe cada cambio en su próxima ejecución; con una
+etiqueta, solo cuando la cambies. Las versiones publicadas están en
+[Releases](https://github.com/novanoticia/mistral-review/releases).
+
 ### Secretos (`secrets:`)
 
 | Secreto | Cuándo es obligatorio |
