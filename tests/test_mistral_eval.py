@@ -864,7 +864,9 @@ class TestMain(unittest.TestCase):
                 guardado = fh.read()
 
         artefacto = json.loads(guardado)
-        self.assertEqual(artefacto["exclusiones"], ["tests/golden/**", "catálogo.yaml", "dist/**"])
+        # Registra lo que de verdad se excluye: las del repo y las sensibles.
+        self.assertEqual(artefacto["exclusiones"], ["tests/golden/**", "catálogo.yaml", "dist/**"]
+                         + list(ev.mr.EXCLUIDOS_SENSIBLES))
         parcial = guardar.call_args_list[0].args[1]
         self.assertTrue(parcial["en_curso"])
         self.assertEqual(parcial["exclusiones"], artefacto["exclusiones"])

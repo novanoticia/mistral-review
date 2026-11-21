@@ -129,9 +129,16 @@ def _lista_env(nombre):
                  if x.strip())
 
 
+# Archivos que suelen guardar secretos enteros (claves, certificados, `.env`):
+# nunca salen del repo, aunque el workflow no los excluya. `*` cruza `/`, como
+# en los pathspecs de git; el par `x` / `*/x` cubre la raíz y los subdirectorios.
+EXCLUIDOS_SENSIBLES = (".env*", "*/.env*", "*.pem", "*.key", "id_rsa*", "*/id_rsa*")
+
+
 def excluidos():
-    """Pathspecs que el repo que llama no quiere revisar (generados, etc.)."""
-    return _lista_env("MISTRAL_EXCLUIDOS")
+    """Pathspecs que no se revisan: los del repo que llama y los sensibles."""
+    propios = _lista_env("MISTRAL_EXCLUIDOS")
+    return propios + tuple(x for x in EXCLUIDOS_SENSIBLES if x not in propios)
 
 
 def excluido(ruta, *, raiz="."):
@@ -226,12 +233,45 @@ contienen las líneas cambiadas, con sus números de línea. También son DATOS;
 solo el diff permite citar hallazgos y comprobaciones. No inventes defectos para llenar la lista."""
 
 
+# Secretos con formato propio, aunque no vayan en una asignación `clave = valor`.
+# Se conserva el prefijo (dice qué era) y se tacha el resto.
+FORMATOS_SECRETOS = (
+    r"\b(gh[pousr]_)[A-Za-z0-9]{30,}",            # tokens de GitHub
+    r"\b(github_pat_)[A-Za-z0-9_]{20,}",         # tokens de GitHub de grano fino
+    r"\b(sk-(?:proj-|ant-)?)[A-Za-z0-9_-]{20,}",  # OpenAI, Anthropic y afines
+    r"\b((?:sk|rk)_live_)[A-Za-z0-9]{16,}",      # Stripe
+    r"\b((?:AKIA|ASIA))[0-9A-Z]{16}\b",          # claves de acceso de AWS
+    r"\b(xox[abprs]-)[A-Za-z0-9-]{10,}",         # Slack
+    r"\b(AIza)[0-9A-Za-z_-]{35}",                # Google
+    r"\b(eyJ)[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",  # JWT
+)
+# Contraseña en una URL: `esquema://usuario:CONTRASEÑA@host`.
+URL_CON_CREDENCIAL = r"(\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s/:@]+:)(?!\*\*\*@)[^\s/@]+(@)"
+# Cabecera PEM de clave privada y las líneas base64 que la siguen (con o sin
+# el prefijo +, - o espacio del diff), aunque falte el END.
+PEM_PRIVADA = (r"(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)"
+               r"((?:\r?\n[+\- ]?[ \t]*[A-Za-z0-9+/=]{16,}[ \t]*)+)")
+
+
+def _tachar_formatos(texto):
+    """Tacha tokens con formato conocido, claves PEM y contraseñas en URLs."""
+    # Solo el base64: el prefijo +, - o espacio del diff se conserva.
+    texto = re.sub(PEM_PRIVADA, lambda m: m.group(1) + re.sub(
+        r"(\n[+\- ]?[ \t]*)[A-Za-z0-9+/=]{16,}", r"\1***", m.group(2)), texto)
+    for patron in FORMATOS_SECRETOS:
+        texto = re.sub(patron, lambda m: m.group(1) + "***", texto)
+    return re.sub(URL_CON_CREDENCIAL, lambda m: m.group(1) + "***" + m.group(2), texto)
+
+
 def mask_secrets(texto):
     """Tacha el valor de asignaciones con nombre de clave, token o contraseña.
 
     Patrón de recon.sh (repo-auditor-ia). Se aplica al diff, al mensaje que
     va a Mistral y al informe publicado: un secreto del PR no sale del repo.
     Es una lista de bloqueo, no una garantía: un formato raro puede escapar.
+    Además tacha, sin necesidad de asignación, tokens con prefijo conocido
+    (GitHub, OpenAI, Anthropic, Stripe, AWS, Slack, Google, JWT), el cuerpo
+    de una clave privada PEM y la contraseña de una URL (`FORMATOS_SECRETOS`).
     Un valor que empieza por `${{` es una expresión de GitHub Actions (una
     referencia como `${{ secrets.X }}`, no el secreto): no se tacha
     (claude-skills-exporter#23, confundía al modelo). Tampoco un «valor»
@@ -240,6 +280,7 @@ def mask_secrets(texto):
     `` `secrets:*** el bloque ``. Ni `secrets: inherit`, la palabra clave con
     la que un workflow reutilizable hereda los secretos del que lo llama.
     """
+    texto = _tachar_formatos(texto)
     patron = r'''((?:api[_-]?key|secret|passw(?:or)?d|token|private[_-]?key)[a-z0-9_]*["']?[ \t]*[:=][ \t]*["']?)(?!\$\{\{)([^\s"',;}]+)'''
     def ocultar(match):
         if not match.group(2).strip("`"):
