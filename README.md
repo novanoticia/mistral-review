@@ -56,7 +56,7 @@ Para revisar con un modelo de OpenRouter en vez de Mistral, ver
 | `model` | Modelo. Con OpenRouter, **obligatorio** (`organización/modelo`); el ejemplo lo toma de `MISTRAL_MODEL` u `OPENROUTER_MODEL` según el proveedor | con Mistral, `zai-glm-5-3-flash` |
 | `provider` | `mistral` u `openrouter` | vacío = `mistral` |
 | `openrouter_provider` | Solo con OpenRouter: proveedor final fijo (p. ej. `z-ai`) | vacío = lo elige OpenRouter |
-| `excluded` | Archivos que no se revisan (generados), uno por línea | ninguno |
+| `excluded` | Patrones de rutas excluidas del diff y de la selección de guías, uno por línea | ninguno |
 | `guides` | Archivos de guía, por orden de preferencia | `REVIEW.md`, `AGENTS.md`, `CLAUDE.md` |
 | `ref` | Rama o etiqueta de este repo cuyo script se ejecuta | `main` |
 

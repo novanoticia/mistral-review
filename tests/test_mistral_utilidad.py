@@ -356,6 +356,27 @@ class TestGuia(unittest.TestCase):
                 self.assertEqual(self.guia(archivos, cobertura=cobertura), self.guia(archivos))
                 self.assertEqual(cobertura, {"estado": estado})
 
+    def test_la_guia_excluida_tampoco_se_elige_mediante_un_enlace(self):
+        with tempfile.TemporaryDirectory() as raiz:
+            privada = os.path.join(raiz, "privada.md")
+            for nombre, texto in ((privada, "regla excluida"),
+                                  (os.path.join(raiz, "CLAUDE.md"), "regla permitida")):
+                with open(nombre, "w", encoding="utf-8") as fh:
+                    fh.write(texto)
+            os.symlink("privada.md", os.path.join(raiz, "REVIEW.md"))
+            guias = "REVIEW.md," + privada + ",CLAUDE.md"
+            for patron in ("./privada.md", os.path.join(raiz, "priv*.md")):
+                with self.subTest(patron=patron), mock.patch.dict(os.environ, {
+                        "MISTRAL_GUIAS": guias, "MISTRAL_EXCLUIDOS": patron}):
+                    self.assertEqual(mr.leer_guia(raiz), ("CLAUDE.md", "regla permitida"))
+
+    def test_si_todas_las_guias_estan_excluidas_el_resultado_es_ausente(self):
+        cobertura = {}
+        self.assertEqual(self.guia({"REVIEW.md": "regla", "CLAUDE.md": "otra regla"},
+                                   {"MISTRAL_EXCLUIDOS": ".", "MISTRAL_GUIAS": ""},
+                                   cobertura=cobertura), (None, ""))
+        self.assertEqual(cobertura, {"estado": "ausente"})
+
 
 class TestPrompt(unittest.TestCase):
     def test_pide_romper_y_refutar_sin_cambiar_el_esquema(self):
