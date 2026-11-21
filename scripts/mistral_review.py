@@ -134,15 +134,20 @@ def excluidos():
     return _lista_env("MISTRAL_EXCLUIDOS")
 
 
-def excluido(ruta):
-    """¿Cubre `ruta` algún pathspec de `excluidos()`? Misma regla que
-    `:(exclude)` en `obtener_diff` (pathspec de Git sin magia): igual, un
-    directorio que la contiene o un comodín donde `*` también cruza `/`.
-    Para lo que se lee fuera del diff (el contraste de `mistral_reply.py`)."""
+def excluido(ruta, *, raiz="."):
+    """¿Cubre `ruta`, absoluta o relativa a `raiz`, algún patrón de exclusión?
+
+    Comprueba rutas literales, directorios y comodines donde `*` también cruza
+    `/`, como los patrones de `:(exclude)` que usa `obtener_diff`.
+    Se usa para las guías y los archivos que el contraste lee fuera del diff.
+    """
+    ruta = os.path.relpath(os.path.join(raiz, ruta), raiz)
     for patron in excluidos():
-        patron = patron.rstrip("/")
-        if patron and (ruta == patron or ruta.startswith(patron + "/")
-                       or fnmatch.fnmatchcase(ruta, patron)):
+        patron = os.path.relpath(os.path.join(raiz, patron), raiz)
+        if patron == ".":
+            if ruta != ".." and not ruta.startswith("../"):
+                return True
+        elif ruta == patron or ruta.startswith(patron + "/") or fnmatch.fnmatchcase(ruta, patron):
             return True
     return False
 
@@ -247,20 +252,26 @@ def mask_secrets(texto):
 
 
 def leer_guia(raiz=".", *, cobertura=None):
-    """Lee la primera guía que exista y, opcionalmente, anota su estado."""
+    """Lee la primera guía que exista y no esté excluida."""
+    raiz_real = os.path.realpath(raiz)
     for nombre in guias():
         ruta = os.path.join(raiz, nombre)
-        if os.path.exists(ruta):
-            with open(ruta, encoding="utf-8") as fh:
-                texto = fh.read(MAX_GUIA + 1)
-            estado = "completa" if texto else "vacia"
-            if len(texto) > MAX_GUIA:
-                texto = texto[:MAX_GUIA] + (
-                    "\n\n[Guía recortada a %d caracteres: faltan reglas.]" % MAX_GUIA)
-                estado = "recortada"
-            if cobertura is not None:
-                cobertura["estado"] = estado
-            return nombre, texto
+        if excluido(nombre, raiz=raiz) or not os.path.exists(ruta):
+            continue
+        ruta_real = os.path.realpath(ruta)
+        destino = os.path.relpath(ruta_real, raiz_real)
+        if excluido(destino, raiz=raiz):
+            continue
+        with open(ruta_real, encoding="utf-8") as fh:
+            texto = fh.read(MAX_GUIA + 1)
+        estado = "completa" if texto else "vacia"
+        if len(texto) > MAX_GUIA:
+            texto = texto[:MAX_GUIA] + (
+                "\n\n[Guía recortada a %d caracteres: faltan reglas.]" % MAX_GUIA)
+            estado = "recortada"
+        if cobertura is not None:
+            cobertura["estado"] = estado
+        return nombre, texto
     if cobertura is not None:
         cobertura["estado"] = "ausente"
     return None, ""

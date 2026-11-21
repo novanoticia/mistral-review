@@ -73,9 +73,10 @@ Actions, y si no se puede leer el historial se revisa igualmente.
 
 ## Qué recibe y qué debe devolver
 
-- Guía `REVIEW.md`, o `CLAUDE.md` si no existe la primera; máximo 60.000
-  caracteres, que hoy cubren `CLAUDE.md` entero (con 20.000 se quedaba fuera
-  casi la mitad). Si algún día se recorta, el modelo recibe el aviso.
+- Primera guía disponible según `guides`. Por defecto, el orden es `REVIEW.md`,
+  `AGENTS.md`, `CLAUDE.md`. `excluded` se aplica tanto a la ruta configurada
+  como al destino final de un enlace simbólico. La guía elegida se envía con
+  un tope de 60.000 caracteres. Si se recorta, el modelo recibe el aviso.
 - Título y diff con diez líneas de contexto, hasta 150.000 caracteres de diff.
   La revisión automática omite la descripción del PR.
 - Contexto de los archivos Python cambiados, leído con `git show` del commit:
