@@ -54,4 +54,10 @@ corrección o se haya acordado su publicación.
 ## Pruebas responsables
 
 Realiza las pruebas únicamente en entornos propios o con autorización
-expresa. No accedas a
+expresa. No accedas a datos ajenos, no interrumpas servicios y no
+realices pruebas destructivas.
+
+## Reconocimientos
+
+Si se publica un aviso de seguridad, se podrá reconocer la contribución
+de quien haya comunicado el problema, siempre con su consentimiento.
