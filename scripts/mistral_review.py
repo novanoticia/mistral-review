@@ -285,6 +285,12 @@ def mask_secrets(texto):
     la que un workflow reutilizable hereda los secretos del que lo llama.
     """
     texto = _tachar_formatos(texto)
+    # Valor entre comillas: se tacha entero, hasta la comilla de cierre de la
+    # misma línea. El patrón general se para en espacios, comas y `;`, y de
+    # `password="uno dos"` dejaba ver `dos` (Codex en repo-auditor-ia#21).
+    entre_comillas = r'''((?:api[_-]?key|secret|passw(?:or)?d|token|private[_-]?key)[a-z0-9_]*["']?[ \t]*[:=][ \t]*)(["'])(?!\$\{\{)([^\n]*?)\2'''
+    texto = re.sub(entre_comillas, lambda m: m.group(0) if not m.group(3) else
+                   m.group(1) + m.group(2) + "***" + m.group(2), texto, flags=re.IGNORECASE)
     patron = r'''((?:api[_-]?key|secret|passw(?:or)?d|token|private[_-]?key)[a-z0-9_]*["']?[ \t]*[:=][ \t]*["']?)(?!\$\{\{)([^\s"',;}]+)'''
     def ocultar(match):
         if not match.group(2).strip("`"):

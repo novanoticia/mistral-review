@@ -84,6 +84,25 @@ class TestSecretos(unittest.TestCase):
                 self.assertIn("***", tachado)
         self.assertEqual(mr.mask_secrets("x = 1\nnombre = 'ana'"), "x = 1\nnombre = 'ana'")
 
+    def test_un_valor_entre_comillas_se_tacha_entero(self):
+        # Codex en repo-auditor-ia#21: el patrón se paraba en el primer espacio,
+        # coma o `;` y dejaba ver el resto del secreto.
+        uno, dos = "primera" + "parte", "segunda" + "parte"
+        for entrada, esperado in (
+                ('password="%s %s"' % (uno, dos), 'password="***"'),
+                ("api_key='%s,%s'" % (uno, dos), "api_key='***'"),
+                ('token: "%s;%s"' % (uno, dos), 'token: "***"'),
+                ('"secret": "%s %s"' % (uno, dos), '"secret": "***"')):
+            with self.subTest(entrada=entrada):
+                tachado = mr.mask_secrets(entrada)
+                self.assertEqual(tachado, esperado)
+                self.assertNotIn(dos, tachado)
+                self.assertEqual(mr.mask_secrets(tachado), tachado)
+        # Una cadena vacía o una expresión de Actions no son secretos.
+        for linea in ('api_key = ""', 'GH_TOKEN: "${{ github.token }}"'):
+            with self.subTest(linea=linea):
+                self.assertEqual(mr.mask_secrets(linea), linea)
+
     def test_no_tacha_nombres_citados_en_prosa(self):
         # `` `secrets:` el bloque `` salía como `` `secrets:*** el bloque ``:
         # la comilla invertida que cierra el nombre no es un valor.
