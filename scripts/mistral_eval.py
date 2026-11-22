@@ -272,20 +272,21 @@ def _procedencia():
             "evaluado": _procedencia_checkout(os.getcwd())}
 
 
-def _validar_evidencia_minima(caso):
-    tramos = caso["evidencia_minima"]
-    if caso["tipo"] != "positivo" or not isinstance(tramos, list) or not tramos:
-        raise ValueError("caso %s: evidencia_minima debe ser una lista no vacía de un positivo"
-                         % caso["id"])
+def _validar_tramos(caso, campo):
+    tramos = caso[campo]
+    if not isinstance(tramos, list) or not tramos:
+        raise ValueError("caso %s: %s debe ser una lista no vacía" % (caso["id"], campo))
     for tramo in tramos:
         if not isinstance(tramo, dict):
-            raise ValueError("caso %s: tramo de evidencia_minima sin archivo y rango" % caso["id"])
+            raise ValueError("caso %s: tramo de %s sin archivo y rango" % (caso["id"], campo))
         archivo, desde, hasta = tramo.get("archivo"), tramo.get("desde"), tramo.get("hasta")
         if (not isinstance(archivo, str) or "\0" in archivo
                 or any(p in ("", ".", "..") for p in archivo.split("/"))
                 or type(desde) is not int or type(hasta) is not int or not 1 <= desde <= hasta):
-            raise ValueError("caso %s: evidencia_minima requiere ruta relativa y líneas válidas"
-                             % caso["id"])
+            raise ValueError("caso %s: %s requiere ruta relativa y líneas válidas"
+                             % (caso["id"], campo))
+        if campo == "fragmentos_contexto" and not archivo.isprintable():
+            raise ValueError("caso %s: fragmentos_contexto requiere rutas imprimibles" % caso["id"])
 
 
 def cargar_casos(ruta):
@@ -315,8 +316,11 @@ def cargar_casos(ruta):
         if "control" in c and not (c["control"] is True and c["tipo"] == "positivo"):
             # Un control es un positivo sintético que se cuenta aparte.
             raise ValueError("caso %s: control solo admite true, en un positivo" % c["id"])
-        if "evidencia_minima" in c:
-            _validar_evidencia_minima(c)
+        if "evidencia_minima" in c and c["tipo"] != "positivo":
+            raise ValueError("caso %s: evidencia_minima solo admite un positivo" % c["id"])
+        for campo in ("evidencia_minima", "fragmentos_contexto"):
+            if campo in c:
+                _validar_tramos(c, campo)
         if c["id"] in vistos:
             raise ValueError("caso repetido: %s" % c["id"])
         vistos.add(c["id"])
@@ -551,7 +555,12 @@ def revisar(caso, modelo, clave, proveedor="mistral", ruta="", *, contexto_modo=
     if contexto_modo == "auxiliar-local":
         opciones_contexto["auxiliares_locales"] = True
     contexto = mr.obtener_contexto(prefijo, caso["cabeza"], **opciones_contexto)
-    mensajes, recortado = mr.construir_mensajes(titulo, None, diff, guia, contexto)
+    fragmentos, _ = _fragmentos_contexto(caso)
+    extra = ()
+    if fragmentos:
+        extra = (("Fragmentos de la versión revisada (solo lectura)", fragmentos),)
+        cobertura_contexto["caracteres_fragmentos"] = len(fragmentos)
+    mensajes, recortado = mr.construir_mensajes(titulo, None, diff, guia, contexto, extra=extra)
     rutas = mr.obtener_rutas_diff(caso["base"], caso["cabeza"])
     rutas_visibles, lineas_visibles = _cambios_en_diff(prefijo)
     cobertura_diff = {
@@ -711,30 +720,56 @@ def resumir(casos, resultados, modelo, repeticiones, proveedor="mistral", ruta="
     return "\n".join(partes) + "\n"
 
 
-def _comprobar_rangos_evidencia(caso):
-    """Contrasta cada rango con las líneas del archivo en el commit revisado."""
-    longitudes = {}
-    for tramo in caso.get("evidencia_minima", ()):
-        archivo = tramo["archivo"]
+def _tramos_en_cabeza(caso, campo):
+    """Valida rangos y lee sus líneas del commit, nunca del árbol de trabajo."""
+    archivos = {}
+    son_fragmentos = campo == "fragmentos_contexto"
+    for tramo in caso.get(campo, ()):
+        archivo, desde, hasta = tramo["archivo"], tramo["desde"], tramo["hasta"]
         ruta_informe = mr.mask_secrets(mr._linea(archivo, limite=None))
-        if archivo not in longitudes:
+        if archivo not in archivos:
+            if son_fragmentos and (not archivo.endswith((".py", ".sh")) or mr.excluido(archivo)):
+                raise CasoNoEvaluable("fragmentos_contexto: archivo no permitido: %s" % ruta_informe)
             objeto = "%s:%s" % (caso["cabeza"], archivo)
             try:
                 contenido = subprocess.run(("git", "cat-file", "blob", objeto),
                                            check=True, capture_output=True).stdout
             except subprocess.CalledProcessError:
-                raise CasoNoEvaluable("evidencia_minima: archivo no disponible en cabeza: %s"
-                                     % ruta_informe) from None
+                raise CasoNoEvaluable("%s: archivo no disponible en cabeza: %s"
+                                     % (campo, ruta_informe)) from None
+            texto = contenido.decode("utf-8", "replace")
+            if son_fragmentos:
+                if "\0" in texto:
+                    raise CasoNoEvaluable("fragmentos_contexto: archivo no textual: %s" % ruta_informe)
+                # Tachar antes de escoger el rango conserva la detección de PEM
+                # aunque su cabecera quede fuera de las líneas solicitadas.
+                texto = mr.mask_secrets(texto)
             # Git numera por LF y también cuenta una última línea sin LF.
-            longitudes[archivo] = contenido.count(b"\n") + int(
-                bool(contenido) and not contenido.endswith(b"\n"))
-        if tramo["hasta"] > longitudes[archivo]:
-            raise CasoNoEvaluable("evidencia_minima: rango %s:%d-%d fuera de las %d líneas de cabeza"
-                                 % (ruta_informe, tramo["desde"], tramo["hasta"], longitudes[archivo]))
+            archivos[archivo] = texto.split("\n")
+            if archivos[archivo][-1] == "":
+                archivos[archivo].pop()
+        lineas = archivos[archivo]
+        if hasta > len(lineas):
+            raise CasoNoEvaluable("%s: rango %s:%d-%d fuera de las %d líneas de cabeza"
+                                 % (campo, ruta_informe, desde, hasta, len(lineas)))
+        yield archivo, desde, hasta, lineas[desde - 1:hasta]
 
 
-def _evidencia_minima_visible(caso, prefijo, contexto_modo):
-    visibles = {}
+def _fragmentos_contexto(caso):
+    bloques, visibles = [], {}
+    usados = 0
+    for archivo, desde, hasta, lineas in _tramos_en_cabeza(caso, "fragmentos_contexto"):
+        bloque = "%s:%d-%d\n%s" % (mr.mask_secrets(archivo), desde, hasta, "\n".join(lineas))
+        usados += len(bloque) + (2 if bloques else 0)
+        if usados > mr.MAX_AUXILIAR:
+            raise CasoNoEvaluable("fragmentos_contexto: supera los %d caracteres tras el tachado"
+                                 % mr.MAX_AUXILIAR)
+        bloques.append(bloque)
+        visibles.setdefault(archivo, set()).update(range(desde, hasta + 1))
+    return "\n\n".join(bloques), visibles
+
+
+def _evidencia_minima_visible(caso, prefijo, contexto_modo, visibles):
     for ruta, linea, numero in mr._lineas_de_hunks(prefijo):
         if linea[0] in "+ ":
             visibles.setdefault(ruta, set()).add(numero)
@@ -755,7 +790,9 @@ def listar(casos, *, contexto_modo=None):
     for c in casos:
         try:
             diff, destino = _datos_caso(c)
-            _comprobar_rangos_evidencia(c)
+            for _ in _tramos_en_cabeza(c, "evidencia_minima"):
+                pass
+            fragmentos, visibles = _fragmentos_contexto(c)
         except CasoNoEvaluable as fallo:
             errores.append("::error::Caso %s: %s" % (mr._linea(c["id"]), fallo))
             continue
@@ -766,9 +803,11 @@ def listar(casos, *, contexto_modo=None):
         prefijo = mr.mask_secrets(diff)[:mr.MAX_DIFF]
         if not _cita_directa_visible(prefijo, destino):
             lineas.append("  sin cita directa visible en el diff preparado")
+        if contexto_modo is not None and fragmentos:
+            lineas.append("  fragmentos de contexto: %d caracteres tras el tachado" % len(fragmentos))
         if contexto_modo is not None and "evidencia_minima" in c:
             lineas.append("  evidencia mínima · %s" % contexto_modo)
-            lineas.extend(_evidencia_minima_visible(c, prefijo, contexto_modo))
+            lineas.extend(_evidencia_minima_visible(c, prefijo, contexto_modo, visibles))
     if errores:
         raise CasoNoEvaluable("\n".join(errores))
     return "\n".join(lineas)

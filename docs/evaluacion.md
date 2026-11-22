@@ -298,6 +298,19 @@ líneas de `cabeza` necesarios para reconocer el fallo. Cada rango lleva un
 `archivo` relativo al repositorio y sus límites inclusivos `desde` y `hasta`.
 La [plantilla](../ejemplos/eval-casos.json) incluye un ejemplo.
 
+Si el caso necesita una línea de código fuera del diff, añade
+`fragmentos_contexto` con la misma estructura de archivo y rango. Por ejemplo,
+`"fragmentos_contexto": [{"archivo": "scripts/verificar.sh", "desde": 18, "hasta": 19}]`
+incluye esas dos líneas del commit `cabeza`, tanto en modo `estandar` como en
+`auxiliar-local`. Para comparar dos variantes, conserva `base` y `cabeza` y
+usa dos identificadores de caso, con el campo presente en uno de ellos.
+
+El evaluador acepta archivos de texto `.py` y `.sh` y aplica las exclusiones del
+revisor. Tacha los secretos antes de extraer las líneas y admite hasta 1.000
+caracteres de fragmentos, incluidas sus rutas y rangos, después del tachado.
+Valida esos límites antes de llamar a la API. Las citas de los hallazgos se
+siguen comprobando contra el diff.
+
 Ejecuta el listado sin `--ejecutar` y con el mismo `--contexto` y las mismas
 exclusiones que usarías en la evaluación. Para cada rango, el listado indica
 cuántas líneas completas aparecen en el diff o el contexto adicional y si
