@@ -65,6 +65,17 @@ class TestCasos(unittest.TestCase):
             with self.subTest(caso=caso), self.assertRaisesRegex(ValueError, "evidencia_minima"):
                 self.cargar([caso])
 
+    def test_fragmentos_contexto_requiere_rutas_relativas_y_rangos_validos(self):
+        tramo = {"archivo": "scripts/recon.sh", "desde": 84, "hasta": 84}
+        casos = [dict(caso, fragmentos_contexto=[tramo]) for caso in (POSITIVO, NEGATIVO)]
+        self.assertEqual(self.cargar(casos), casos)
+        for fragmentos in ([], [dict(tramo, archivo="../recon.sh")],
+                           [dict(tramo, archivo="a\n.sh")], [dict(tramo, desde=False)],
+                           [dict(tramo, hasta=83)]):
+            with self.subTest(fragmentos=fragmentos), self.assertRaisesRegex(
+                    ValueError, "fragmentos_contexto"):
+                self.cargar([dict(POSITIVO, fragmentos_contexto=fragmentos)])
+
     def test_rechaza_casos_incompletos_repetidos_o_sin_sha(self):
         malos = ([dict(POSITIVO, tipo="otro")],
                  [{k: v for k, v in POSITIVO.items() if k != "arreglo"}],
@@ -330,6 +341,32 @@ class TestRevisar(unittest.TestCase):
         registro, api = self.revisar([texto], diff=diff)
         self.assertEqual((registro["estado"], api.call_count), ("valida", 1))
         self.assertNotIn(valor, api.call_args.args[0][1]["content"])
+
+    def test_fragmentos_contexto_se_tachan_antes_de_cortar_y_no_cambian_el_diff(self):
+        ruta = "scripts/recon.sh"
+        valor = "cXdl" + "YXNk" + "Zg=="
+        fuente = ("# fuera del rango\n-----BEGIN PRIVATE KEY-----\n"
+                  + valor + "\n-----END PRIVATE KEY-----\nKEYVAL_REGEX=patron\n")
+        caso = dict(POSITIVO, fragmentos_contexto=[
+            {"archivo": ruta, "desde": 3, "hasta": 3},
+            {"archivo": ruta, "desde": 5, "hasta": 5},
+        ])
+        respuesta = json.dumps({"resumen": "R", "hallazgos": [HALLAZGO],
+                                "comprobaciones": COMPROBACIONES})
+        with mock.patch.object(ev.subprocess, "run", return_value=mock.Mock(
+                stdout=fuente.encode())) as leer:
+            registro, api = self.revisar([respuesta], caso=caso)
+        leer.assert_called_once_with(("git", "cat-file", "blob", SHA + ":" + ruta),
+                                     check=True, capture_output=True)
+        usuario = api.call_args.args[0][1]["content"]
+        self.assertIn(DIFF, usuario)
+        self.assertIn(ruta + ":3-3\n***", usuario)
+        self.assertIn(ruta + ":5-5\nKEYVAL_REGEX=patron", usuario)
+        self.assertNotIn(valor, usuario)
+        self.assertNotIn("fuera del rango", usuario)
+        self.assertNotIn("BEGIN PRIVATE KEY", usuario)
+        self.assertEqual(registro["estado"], "valida")
+        self.assertGreater(registro["cobertura"]["contexto"]["caracteres_fragmentos"], 0)
 
     def test_cobertura_del_diff_sin_cambiar_los_mensajes_ni_la_validacion(self):
         borrado = ("diff --git a/b.py b/b.py\n--- a/b.py\n+++ /dev/null\n"
@@ -1060,6 +1097,43 @@ class TestMain(unittest.TestCase):
             self.assertIn("a.py:1-2 " + auxiliar, salida.getvalue())
             self.assertIn("a.py:1-3 " + parcial, salida.getvalue())
             self.assertNotIn("return x + 1", salida.getvalue())
+
+    def test_listado_cuenta_fragmentos_sin_mostrar_su_contenido(self):
+        tramo = {"archivo": "scripts/recon.sh", "desde": 1, "hasta": 1}
+        caso = dict(POSITIVO, fragmentos_contexto=[tramo], evidencia_minima=[tramo])
+        salida = io.StringIO()
+        with mock.patch.object(ev, "cargar_casos", return_value=[caso]), \
+                mock.patch.object(ev, "_datos_caso", return_value=(DIFF, {"a.py": [(1, 2, "f")]})), \
+                mock.patch.object(ev.subprocess, "run", return_value=mock.Mock(stdout=b"KEYVAL_REGEX=patron")), \
+                mock.patch.object(mr, "obtener_contexto", return_value=""), \
+                mock.patch.object(mr.urllib.request, "urlopen") as abrir, redirect_stdout(salida):
+            self.assertEqual(ev.main([]), 0)
+        abrir.assert_not_called()
+        self.assertIn("scripts/recon.sh:1-1 completa (1/1)", salida.getvalue())
+        self.assertNotIn("KEYVAL_REGEX=patron", salida.getvalue())
+
+    def test_fragmentos_contexto_respeta_exclusiones_antes_de_leer(self):
+        with mock.patch.dict(os.environ, {"MISTRAL_EXCLUIDOS": "privado"}):
+            for archivo in ("config.yml", ".env.py", "sub/id_rsa.sh", "privado/a.py"):
+                caso = dict(POSITIVO, fragmentos_contexto=[
+                    {"archivo": archivo, "desde": 1, "hasta": 1},
+                ])
+                with self.subTest(archivo=archivo), mock.patch.object(ev.subprocess, "run") as leer, \
+                        self.assertRaisesRegex(ev.CasoNoEvaluable, "archivo no permitido"):
+                    ev._fragmentos_contexto(caso)
+                leer.assert_not_called()
+
+    def test_listado_rechaza_fragmentos_que_superan_el_tope(self):
+        tramo = {"archivo": "a.py", "desde": 1, "hasta": 1}
+        caso = dict(POSITIVO, fragmentos_contexto=[tramo])
+        salida = io.StringIO()
+        with mock.patch.object(ev, "cargar_casos", return_value=[caso]), \
+                mock.patch.object(ev, "_datos_caso", return_value=(DIFF, {"a.py": [(1, 2, "f")]})), \
+                mock.patch.object(ev.subprocess, "run", return_value=mock.Mock(stdout=b"x" * 1000)), \
+                mock.patch.object(mr.urllib.request, "urlopen") as abrir, redirect_stdout(salida):
+            self.assertEqual(ev.main([]), 2)
+        abrir.assert_not_called()
+        self.assertIn("fragmentos_contexto: supera los 1000 caracteres", salida.getvalue())
 
     def test_listado_no_cuenta_lineas_eliminadas_o_a_medias_como_evidencia_de_cabeza(self):
         diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
