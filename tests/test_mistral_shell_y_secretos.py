@@ -261,6 +261,21 @@ class TestSecretos(unittest.TestCase):
 
 
 class TestParametros(unittest.TestCase):
+    def test_el_contexto_solo_lee_rutas_validas_y_permitidas(self):
+        permitida = "acción.py"
+        excluida = "privado.py"
+        valido = diff_de(permitida, 2, "permitida")
+        ambiguo = diff_de("anterior.py", 2, "ignorada").replace(
+            "+++ b/anterior.py", r'+++ "b/archivo\377.py"')
+        diff = ambiguo + diff_de(excluida, 2, "excluida") + valido
+        blob = mock.Mock(returncode=0, stdout=b"resultado = 1\n")
+        with mock.patch.dict(os.environ, {"MISTRAL_EXCLUIDOS": excluida}), \
+                mock.patch.object(mr.subprocess, "run", return_value=blob) as git:
+            contexto = mr.obtener_contexto(diff, "abc123")
+        git.assert_called_once_with(["git", "show", f"abc123:{permitida}"], capture_output=True)
+        self.assertIn(f"## {permitida}", contexto)
+        self.assertIn("resultado = 1", contexto)
+
     def test_listas_por_saltos_de_linea_o_comas(self):
         with mock.patch.dict(os.environ, {"MISTRAL_EXCLUIDOS": " a/b.json\n\nc/*.yaml , d "}):
             self.assertEqual(mr.excluidos(),
