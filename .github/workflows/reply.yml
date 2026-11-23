@@ -50,6 +50,8 @@ jobs:
     # El contexto `github` es el del repo que llama: mismos filtros que tenía
     # email-triage-plugin. Nunca responde a GitHub Actions (ni a sí mismo) y,
     # en eventos automáticos, solo a PR del propio repo.
+    # En issue_comment, la lista de bots coincide con mistral_reply.BOTS.
+    # El script comprueba después el contenido y la procedencia del PR.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       ((github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment') &&
@@ -57,7 +59,12 @@ jobs:
        github.event.review.user.login != 'github-actions[bot]' &&
        github.event.comment.user.login != 'github-actions[bot]') ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
-       github.event.comment.user.login != 'github-actions[bot]')
+       ((github.event.comment.user.type == 'Bot' &&
+         contains(fromJSON('["chatgpt-codex-connector[bot]","claude[bot]","coderabbitai[bot]","copilot-pull-request-reviewer[bot]","gemini-code-assist[bot]"]'),
+                  github.event.comment.user.login)) ||
+        (github.event.comment.user.type == 'User' &&
+         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                  github.event.comment.author_association))))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
