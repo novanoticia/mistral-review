@@ -720,6 +720,21 @@ class TestWorkflowMistralReply(unittest.TestCase):
     def cargar(self, ruta):
         return yaml.safe_load((_RAIZ / ruta).read_text(encoding="utf-8"))
 
+    def test_el_job_de_comentarios_solo_admite_autores_permitidos(self):
+        workflow = self.cargar(".github/workflows/reply.yml")
+        condicion = workflow["jobs"]["responder"]["if"]
+        _, comentarios = condicion.split("(github.event_name == 'issue_comment' &&", 1)
+        bots = json.dumps(sorted(reply.BOTS), separators=(",", ":"))
+        asociaciones = '["OWNER","MEMBER","COLLABORATOR"]'
+        self.assertEqual(
+            " ".join(comentarios.split()),
+            "github.event.issue.pull_request && "
+            "((github.event.comment.user.type == 'Bot' && "
+            f"contains(fromJSON('{bots}'), github.event.comment.user.login)) || "
+            "(github.event.comment.user.type == 'User' && "
+            f"contains(fromJSON('{asociaciones}'), github.event.comment.author_association))))",
+        )
+
     def test_workflow_lee_codigo_sin_permiso_de_repararlo_y_ejecuta_rama_de_confianza(self):
         workflow = self.cargar(".github/workflows/reply.yml")
         trabajo = workflow["jobs"]["responder"]
