@@ -366,7 +366,14 @@ def obtener_rutas_diff(base, cabeza):
         ["git", "diff", "--name-only", "-z", "%s...%s" % (base, cabeza),
          "--", "."] + excl,
         check=True, capture_output=True).stdout
-    return set(salida.decode("utf-8", "replace").split("\0")) - {""}
+    rutas = set()
+    for ruta in salida.split(b"\0"):
+        if ruta:
+            try:
+                rutas.add(ruta.decode("utf-8"))
+            except UnicodeDecodeError:
+                continue
+    return rutas
 
 
 _SHA = re.compile(r"^[0-9a-f]{7,64}$")
@@ -425,6 +432,16 @@ def _tachar_diff_pem(diff):
     return "\n".join(lineas)
 
 
+def _ruta_cabecera_diff(ruta, prefijo):
+    """Lee una ruta de Git solo si se puede representar sin perder bytes."""
+    if ruta.startswith('"'):
+        try:
+            ruta = ast.literal_eval("b" + ruta).decode("utf-8")
+        except (ValueError, SyntaxError):
+            return None
+    return ruta[2:] if ruta.startswith(prefijo) else None
+
+
 def _lineas_de_hunks(diff):
     """Recorre el diff: (ruta, línea con prefijo, nº de línea en la cabeza).
 
@@ -442,17 +459,10 @@ def _lineas_de_hunks(diff):
             en_hunk = False
         elif not en_hunk and linea.startswith(("--- ", "+++ ")):
             ruta = linea[4:].split("\t", 1)[0]
-            if ruta.startswith('"'):
-                # Git cita bytes UTF-8 con escapes C/octales (core.quotePath).
-                try:
-                    ruta = ast.literal_eval("b" + ruta).decode("utf-8", "replace")
-                except (ValueError, SyntaxError):
-                    ruta = ""
-            ruta = ruta[2:] if ruta.startswith(("a/", "b/")) else None
             if linea.startswith("--- "):
-                anterior = ruta
+                anterior = _ruta_cabecera_diff(ruta, "a/")
             else:
-                archivo = ruta or anterior  # /dev/null: fichero eliminado
+                archivo = anterior if ruta == "/dev/null" else _ruta_cabecera_diff(ruta, "b/")
         elif linea.startswith("@@ "):
             en_hunk = True
             cabecera = _HUNK.match(linea)
@@ -706,7 +716,9 @@ def obtener_contexto(diff, cabeza, *, cobertura=None, auxiliares_locales=False,
     El experimento de evaluación permite añadir un auxiliar con el sobrante.
     """
     cambios = lineas_cambiadas(diff)
-    candidatas = sorted((ruta for ruta in cambios if ruta.endswith((".py", ".sh"))),
+    # La lectura de un objeto Git tiene su propio límite de exclusión.
+    candidatas = sorted((ruta for ruta in cambios
+                         if ruta.endswith((".py", ".sh")) and not excluido(ruta)),
                         key=lambda r: (_es_test(r), r))
     nuevas, visibles = {}, {}
     if auxiliares_locales:
