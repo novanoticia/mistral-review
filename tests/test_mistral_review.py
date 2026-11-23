@@ -68,6 +68,23 @@ class TestDiff(unittest.TestCase):
         self.assertIn("linea_base.json", sin)   # sin parámetro, nada se excluye
 
 
+class TestGuia(unittest.TestCase):
+    def test_usa_la_primera_guia_con_destino_dentro_del_repo(self):
+        with tempfile.TemporaryDirectory() as d:
+            raiz = os.path.join(d, "repo")
+            os.mkdir(raiz)
+            externa = os.path.join(d, "externa.md")
+            interna = os.path.join(raiz, "interna.md")
+            for ruta, texto in ((externa, "Guía externa"), (interna, "Guía interna")):
+                with open(ruta, "w", encoding="utf-8") as fh:
+                    fh.write(texto)
+            os.symlink(externa, os.path.join(raiz, "REVIEW.md"))
+            os.symlink("interna.md", os.path.join(raiz, "AGENTS.md"))
+            with mock.patch.dict(os.environ, {"MISTRAL_GUIAS": "REVIEW.md,AGENTS.md",
+                                              "MISTRAL_EXCLUIDOS": ""}):
+                self.assertEqual(mr.leer_guia(raiz), ("AGENTS.md", "Guía interna"))
+
+
 class TestPrompt(unittest.TestCase):
     def test_lleva_guia_titulo_y_diff_entero(self):
         msgs, recortado = mr.construir_mensajes("T", "D", "+x\n" * 10,

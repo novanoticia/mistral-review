@@ -183,6 +183,8 @@ enviar nada, y otra vez antes de publicar:
   escapar.
 - **Se excluyen siempre** `.env*`, `*.pem`, `*.key` e `id_rsa*`, en cualquier
   carpeta, aunque el workflow no los excluya.
+- **Las guías se leen dentro del repositorio.** Se omiten los enlaces que
+  apuntan fuera y se busca la siguiente guía configurada.
 - **Los datos van delimitados** con un código que el PR no puede imitar, y el
   modelo recibe la orden de tratar todo lo que va dentro como datos, nunca
   como instrucciones. Reduce el riesgo de que un PR manipule la revisión, pero
