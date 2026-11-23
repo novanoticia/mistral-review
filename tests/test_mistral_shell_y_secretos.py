@@ -190,6 +190,37 @@ class TestSecretos(unittest.TestCase):
         self.assertEqual(mr.mask_secrets(corta).split("\n")[1:],
                          ["+***", "+***", "+variable_larga_de_codigo = 3"])
 
+    def test_tacha_las_coordenadas_pem_del_diff_en_ambas_versiones(self):
+        cabecera = "-----BEGIN " + "PRIVATE KEY-----"
+        pie = "-----END " + "PRIVATE KEY-----"
+        anterior = f"{cabecera}\nAAAA\nBBBB\nCCCC\n{pie}\nx = 1\n"
+        nueva = f"inicio\n{cabecera}\nAAAA\nBBBB\nDDDD\n{pie}\nx = 1\n"
+        blobs = {"a" * 40: anterior, "b" * 40: nueva}
+        diff = ("diff --git a/a.py b/a.py\n"
+                f"index {'a' * 40}..{'b' * 40} 100644\n"
+                "--- a/a.py\n+++ b/a.py\n"
+                f"@@ -3,4 +4,4 @@ AAAA\n BBBB\n-CCCC\n+DDDD\n {pie}\n x = 1\n")
+        with mock.patch.object(mr.subprocess, "run", side_effect=lambda args, **_: (
+                mock.Mock(stdout=blobs[args[-1]].encode()))):
+            tachado = mr._tachar_diff_pem(diff)
+        self.assertEqual(tachado.split("\n")[4:10],
+                         ["@@ -3,4 +4,4 @@", " ***", "-***", "+***", f" {pie}", " x = 1"])
+        self.assertEqual(mr.lineas_cambiadas(tachado), {"a.py": {4, 5}})
+
+    def test_tacha_el_pem_del_blob_antes_de_elegir_contexto(self):
+        cabecera = "-----BEGIN " + "RSA PRIVATE KEY-----"
+        pie = "-----END " + "RSA PRIVATE KEY-----"
+        fuente = (f"{cabecera}\r\nProc-Type: 4,ENCRYPTED\r\nDEK-Info: PRUEBA\r\n\r\n"
+                  f"+AAA\r\nBBBB\r\n{pie}\r\nx = 1\r\n")
+        with mock.patch.object(mr.subprocess, "run",
+                               return_value=mock.Mock(returncode=0, stdout=fuente.encode())), \
+                mock.patch.object(mr, "_rangos_python", return_value=[(5, 8, "")]):
+            contexto = mr.obtener_contexto(diff_de("a.py", 5, "marcador"), "abc123")
+        self.assertIn("# líneas 5-8", contexto)
+        self.assertIn("***\r\n***\r\n", contexto)
+        self.assertIn("x = 1", contexto)
+        self.assertNotIn(cabecera, contexto)
+
     def test_no_tacha_lo_que_solo_se_parece_a_un_secreto(self):
         for linea in ("task-identifier-largo-para-la-prueba-xyz",
                       "pip install scikit-learn", "ver https://example.com/a:b@c",

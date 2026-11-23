@@ -251,19 +251,25 @@ FORMATOS_SECRETOS = (
 )
 # Contraseña en una URL: `esquema://usuario:CONTRASEÑA@host`.
 URL_CON_CREDENCIAL = r"(\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s/:@]+:)(?!\*\*\*@)[^\s/@]+(@)"
-# Cabecera PEM de clave privada y las líneas que la siguen hechas solo de
-# base64, también la última aunque sea corta (`q2w==`), con o sin el prefijo
-# +, - o espacio del diff, aunque falte el END. Una línea con otra cosa
-# (el END, código) corta el bloque.
-PEM_PRIVADA = (r"(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)"
-               r"((?:\r?\n[+\- ]?[ \t]*[A-Za-z0-9+/=]+[ \t]*(?=\r?\n|$))+)")
+_CABECERA_PEM = r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"
+_BASE64_PEM = r"[A-Za-z0-9+/=]+"
+
+
+def _tachar_pem(texto, *, en_diff=False):
+    """Tacha el cuerpo de una clave PEM y conserva la numeración de líneas."""
+    prefijo = r"[+\- ]?" if en_diff else ""
+    cabecera = _CABECERA_PEM
+    if not en_diff:
+        # Algunos PEM incluyen metadatos de cifrado y una línea separadora.
+        cabecera += r"(?:(?:\r?\n)(?:[ \t]*|(?:Proc-Type|DEK-Info):[^\r\n]*)(?=\r?\n|$))*"
+    cuerpo = rf"(?:\r?\n{prefijo}[ \t]*{_BASE64_PEM}[ \t]*(?=\r?\n|$))+"
+    return re.sub(rf"({cabecera})({cuerpo})", lambda m: m[1] + re.sub(
+        rf"(\n{prefijo}[ \t]*){_BASE64_PEM}", r"\1***", m[2]), texto)
 
 
 def _tachar_formatos(texto):
     """Tacha tokens con formato conocido, claves PEM y contraseñas en URLs."""
-    # Solo el base64: el prefijo +, - o espacio del diff se conserva.
-    texto = re.sub(PEM_PRIVADA, lambda m: m.group(1) + re.sub(
-        r"(\n[+\- ]?[ \t]*)[A-Za-z0-9+/=]+", r"\1***", m.group(2)), texto)
+    texto = _tachar_pem(texto, en_diff=True)
     for patron in FORMATOS_SECRETOS:
         texto = re.sub(patron, lambda m: m.group(1) + "***", texto)
     return re.sub(URL_CON_CREDENCIAL, lambda m: m.group(1) + "***" + m.group(2), texto)
@@ -340,12 +346,13 @@ def leer_guia(raiz=".", *, cobertura=None):
 def obtener_diff(base, cabeza):
     """`git diff -U10 base...cabeza` sin los ficheros generados."""
     excl = [":(exclude)%s" % r for r in excluidos()]
-    return subprocess.run(
-        ["git", "-c", "core.quotePath=true", "diff", "--no-color",
-         "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/",
+    salida = subprocess.run(
+        ["git", "-c", "core.quotePath=true", "-c", "diff.suppressBlankEmpty=false",
+         "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--full-index",
+         "--src-prefix=a/", "--dst-prefix=b/", "--submodule=short",
          "-U10", "%s...%s" % (base, cabeza), "--", "."] + excl,
-        check=True, capture_output=True, text=True, encoding="utf-8",
-        errors="replace").stdout
+        check=True, capture_output=True).stdout
+    return _tachar_diff_pem(salida.decode("utf-8", "replace").replace("\r\n", "\n"))
 
 
 def obtener_rutas_diff(base, cabeza):
@@ -364,7 +371,58 @@ def obtener_rutas_diff(base, cabeza):
 
 _SHA = re.compile(r"^[0-9a-f]{7,64}$")
 _FUNCION_SHELL = re.compile(r"^(?:function[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:\(\))?[ \t]*\{[ \t]*$")
-_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_INDICE_BLOBS = re.compile(r"^index ([0-9a-f]{40,64})\.\.([0-9a-f]{40,64})(?: \d{6})?$")
+
+
+def _lineas_pem_del_blob(oid):
+    if not oid.strip("0"):  # Lado ausente de una adición o eliminación.
+        return {}
+    blob = subprocess.run(["git", "cat-file", "blob", oid],
+                          check=True, capture_output=True).stdout
+    texto = blob.decode("utf-8", "replace").replace("\r\n", "\n")
+    tachado = _tachar_pem(texto)
+    if texto == tachado:
+        return {}
+    return {numero: segura for numero, (original, segura) in enumerate(
+        zip(texto.split("\n"), tachado.split("\n")), 1) if original != segura}
+
+
+def _tachar_diff_pem(diff):
+    """Aplica el tachado de ambos blobs conservando prefijos y coordenadas."""
+    lineas = diff.split("\n")
+    blobs = None
+    es_submodulo = en_hunk = False
+    for pos, linea in enumerate(lineas):
+        if linea.startswith("diff --git "):
+            blobs = None
+            es_submodulo = en_hunk = False
+        elif not en_hunk and linea.startswith("index "):
+            blobs = _INDICE_BLOBS.fullmatch(linea)
+            es_submodulo |= linea.endswith(" 160000")
+        elif not en_hunk and linea.startswith(("new file mode ", "deleted file mode ")):
+            es_submodulo |= linea.endswith(" 160000")
+        elif linea.startswith("@@ ") and not es_submodulo:
+            cabecera = _HUNK.match(linea)
+            if not cabecera or not blobs:
+                raise OSError("No se pudieron asociar las líneas del diff con sus blobs")
+            if not en_hunk:
+                antiguas, nuevas = map(_lineas_pem_del_blob, blobs.groups())
+                en_hunk = True
+            antigua, nueva = map(int, cabecera.groups())
+            if antiguas or nuevas:
+                # La etiqueta opcional puede citar otra línea del mismo archivo.
+                lineas[pos] = cabecera[0]
+        elif en_hunk and linea[:1] in ("+", "-", " "):
+            prefijo = linea[0]
+            segura = nuevas.get(nueva) if prefijo != "-" else None
+            if segura is None and prefijo != "+":
+                segura = antiguas.get(antigua)
+            if segura is not None:
+                lineas[pos] = prefijo + segura
+            antigua += prefijo != "+"
+            nueva += prefijo != "-"
+    return "\n".join(lineas)
 
 
 def _lineas_de_hunks(diff):
@@ -398,7 +456,7 @@ def _lineas_de_hunks(diff):
         elif linea.startswith("@@ "):
             en_hunk = True
             cabecera = _HUNK.match(linea)
-            numero = int(cabecera.group(1)) if cabecera else 0
+            numero = int(cabecera.group(2)) if cabecera else 0
         elif en_hunk and archivo and linea.startswith(("+", "-", " ")):
             yield archivo, linea, numero
             if not linea.startswith("-"):
@@ -676,7 +734,7 @@ def obtener_contexto(diff, cabeza, *, cobertura=None, auxiliares_locales=False,
             rutas_no_disponibles += 1
             continue
         texto = proc.stdout.decode("utf-8", "replace")
-        lineas = texto.split("\n")
+        lineas = _tachar_pem(texto).split("\n")
         python = ruta.endswith(".py")
         rangos = (_rangos_python(texto, cambios[ruta]) if python
                   else _rangos_shell(texto, cambios[ruta]))
