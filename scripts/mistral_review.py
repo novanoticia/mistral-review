@@ -34,6 +34,7 @@ import fnmatch
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import signal
 import subprocess
@@ -325,6 +326,8 @@ def leer_guia(raiz=".", *, cobertura=None):
         if excluido(nombre, raiz=raiz) or not os.path.exists(ruta):
             continue
         ruta_real = os.path.realpath(ruta)
+        if not Path(ruta_real).is_relative_to(raiz_real):
+            continue
         destino = os.path.relpath(ruta_real, raiz_real)
         if excluido(destino, raiz=raiz):
             continue

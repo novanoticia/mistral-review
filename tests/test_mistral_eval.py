@@ -13,7 +13,7 @@ import os
 import subprocess
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import chdir, redirect_stderr, redirect_stdout
 from unittest import mock
 
 _RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -942,11 +942,11 @@ class TestMain(unittest.TestCase):
             ruta = os.path.join(d, "r.json")
             with open(guia, "w", encoding="utf-8") as fh:
                 fh.write(parte_visible + "Segunda regla fuera del tope.")
-            patron_absoluto = os.path.abspath("dist/**")
+            patron_absoluto = os.path.join(d, "dist/**")
             entorno = {"MISTRAL_API_KEY": "clave", "MISTRAL_PROVEEDOR": "mistral",
-                       "MISTRAL_GUIAS": os.path.join(d, "inexistente.md") + "," + guia,
+                       "MISTRAL_GUIAS": "inexistente.md,GUIA.md",
                        "MISTRAL_EXCLUIDOS": "  tests/golden/**,\n catálogo.yaml \n" + patron_absoluto}
-            with mock.patch.dict(os.environ, entorno), \
+            with chdir(d), mock.patch.dict(os.environ, entorno), \
                     mock.patch.object(ev, "cargar_casos", return_value=[NEGATIVO]), \
                     mock.patch.object(ev, "git", return_value="asunto"), \
                     mock.patch.object(mr, "MAX_GUIA", len(parte_visible)), \
